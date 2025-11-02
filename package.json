@@ -1,0 +1,21 @@
+{
+  "name": "fov-bot-loja",
+  "version": "1.0.0",
+  "description": "Bot do Discord para loja de roupas/comunidade com anúncios, tickets e integração Discloud.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "deploy-commands": "node deploy-commands.js"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^17.2.3",
+    "@discordjs/rest": "^2.6.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}
