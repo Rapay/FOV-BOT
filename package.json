@@ -1,5 +1,5 @@
 {
-  "name": "fov-bot-loja",
+  "name": "fov-bot",
   "version": "1.0.0",
   "description": "Bot do Discord para loja de roupas/comunidade com anúncios, tickets e integração Discloud.",
   "main": "index.js",

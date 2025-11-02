@@ -58,3 +58,22 @@ node deploy-commands.js
 - O comando de inicialização é `npm start`.
 
 Observação: mantenha seu arquivo `.env` fora do controle de versão. Use o arquivo `.env.example` para documentar quais variáveis são necessárias.
+
+## Gerar ZIP pronto para upload (Windows PowerShell)
+
+Você pode usar o script `make_deploy_zip.ps1` incluído no projeto para montar um ZIP contendo apenas os arquivos necessários para o deploy no painel Discloud.
+
+1. Abra PowerShell na raiz do projeto.
+2. Execute:
+
+```powershell
+.\make_deploy_zip.ps1
+```
+
+3. O arquivo `bot-deploy.zip` será gerado na raiz do projeto. Suba esse ZIP no painel Discloud (Projects -> Upload ZIP) e configure as variáveis de ambiente (`TOKEN`, `CLIENT_ID`, `GUILD_ID` se necessário).
+
+Observações:
+- O script exclui `node_modules` e `.env` (não serão incluídos no ZIP).
+- Se quiser incluir outros arquivos, edite a lista `itemsToCopy` no início do script `make_deploy_zip.ps1`.
+
+Depois do upload, confirme no painel que `MAIN` está definido como `index.js` (ou altere `discloud.config` se preferir apontar para outro arquivo). Clique em Deploy/Start e verifique os logs.
