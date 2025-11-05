@@ -51,108 +51,108 @@ module.exports = {
         return interaction.update({ content: 'Envio de anúncio cancelado.', embeds: [], components: [] });
       }
 
-      // New message panel buttons
-      if (id && id.startsWith('message_')) {
-        const [action, key] = id.split(':');
+      // If this is a message panel button, the collector on the panel message
+      // will handle it. Skip global handling to avoid double responses which
+      // cause "This interaction failed" (two handlers calling showModal/update).
+      if (id && id.startsWith('message_')) return;
+
+      // If a select menu from the message panel was used to choose a container to edit
+      if (interaction.isStringSelectMenu() && id && id.startsWith('message_select_edit:')) {
+        const key = id.split(':')[1];
         const pending = client.pendingMessages && client.pendingMessages.get(key);
         if (!pending) return interaction.reply({ content: 'Sessão expirada ou inválida.', ephemeral: true });
-        if (interaction.user.id !== pending.authorId) return interaction.reply({ content: 'Apenas quem iniciou pode interagir com este painel.', ephemeral: true });
+        if (interaction.user.id !== pending.authorId) return interaction.reply({ content: 'Apenas quem iniciou pode usar este seletor.', ephemeral: true });
+        const selected = interaction.values && interaction.values[0];
+        const idx = parseInt(selected, 10);
+        if (Number.isNaN(idx) || idx < 0 || idx >= (pending.containers || []).length) return interaction.reply({ content: 'Seleção inválida.', ephemeral: true });
 
-        if (action === 'message_cancel') {
-          client.pendingMessages.delete(key);
-          return interaction.update({ content: 'Criação de mensagem cancelada.', embeds: [], components: [] });
-        }
-
-        if (action === 'message_add') {
-          // Abrir modal para criar um container (inclui fields: uma linha por field no formato name|value)
-          const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require('discord.js');
-          const modal = new ModalBuilder().setCustomId(`message_modal:${key}`).setTitle('Adicionar container (embed)');
-          const titleInput = new TextInputBuilder().setCustomId('c_title').setLabel('Título').setStyle(TextInputStyle.Short).setRequired(false);
-          const descInput = new TextInputBuilder().setCustomId('c_description').setLabel('Descrição').setStyle(TextInputStyle.Paragraph).setRequired(false);
-          const colorInput = new TextInputBuilder().setCustomId('c_color').setLabel('Cor (hex ou nome)').setStyle(TextInputStyle.Short).setRequired(false);
-          const imageInput = new TextInputBuilder().setCustomId('c_image').setLabel('URL da imagem').setStyle(TextInputStyle.Short).setRequired(false);
-          const footerInput = new TextInputBuilder().setCustomId('c_footer').setLabel('Footer').setStyle(TextInputStyle.Short).setRequired(false);
-          const fieldsInput = new TextInputBuilder().setCustomId('c_fields').setLabel('Fields (uma por linha: nome|valor)').setStyle(TextInputStyle.Paragraph).setRequired(false).setPlaceholder('Ex:\nPreço|R$100\nTamanho|P,M,G');
-
-          modal.addComponents(
-            new ActionRowBuilder().addComponents(titleInput),
-            new ActionRowBuilder().addComponents(descInput),
-            new ActionRowBuilder().addComponents(colorInput),
-            new ActionRowBuilder().addComponents(imageInput),
-            new ActionRowBuilder().addComponents(footerInput),
-            new ActionRowBuilder().addComponents(fieldsInput)
-          );
-          return interaction.showModal(modal);
-        }
-
-        if (action === 'message_preview') {
-          // Build preview from containers
-          const { EmbedBuilder } = require('discord.js');
-          const embeds = (pending.containers || []).map(c => {
-            const e = new EmbedBuilder();
-            if (c.title) e.setTitle(c.title);
-            if (c.description) e.setDescription(c.description);
-            if (c.color) try { e.setColor(c.color); } catch {}
-            if (c.image) try { e.setImage(c.image); } catch {}
-            if (c.footer) e.setFooter({ text: c.footer });
-            if (c.fields) for (const f of c.fields || []) e.addFields({ name: f.name, value: f.value });
-            return e;
-          });
-          if (embeds.length === 0) embeds.push(new EmbedBuilder().setTitle('— Nenhum container criado —').setDescription('Adicione containers para compor a mensagem.'));
-          return interaction.reply({ content: 'Pré-visualização:', embeds: embeds.map(e=>e.toJSON()), ephemeral: true });
-        }
-
-        if (action === 'message_remove_last') {
-          pending.containers = pending.containers || [];
-          const removed = pending.containers.pop();
-          client.pendingMessages.set(key, pending);
-          return interaction.reply({ content: removed ? 'Último container removido.' : 'Nenhum container para remover.', ephemeral: true });
-        }
-
-        if (action === 'message_clear') {
-          pending.containers = [];
-          client.pendingMessages.set(key, pending);
-          return interaction.reply({ content: 'Todos os containers foram removidos da sessão.', ephemeral: true });
-        }
-
-        if (action === 'message_send') {
-          // send assembled message to channel
-          const ch = interaction.guild.channels.cache.get(pending.channelId);
-          if (!ch || !ch.isTextBased()) return interaction.reply({ content: 'Canal alvo inválido ou não encontrado.', ephemeral: true });
-          try {
-            const { EmbedBuilder } = require('discord.js');
-            for (const c of (pending.containers || [])) {
-              const e = new EmbedBuilder();
-              if (c.title) e.setTitle(c.title);
-              if (c.description) e.setDescription(c.description);
-              if (c.color) try { e.setColor(c.color); } catch {}
-              if (c.image) try { e.setImage(c.image); } catch {}
-              if (c.footer) e.setFooter({ text: c.footer });
-              if (c.fields) for (const f of c.fields || []) e.addFields({ name: f.name, value: f.value });
-              await ch.send({ embeds: [e] }).catch(err=>console.error('Erro ao enviar embed:', err));
-            }
-
-            // Optional integration: save as FAQ if requested
-            if (pending.saveAsFAQ) {
-              try {
-                const fs = require('fs');
-                const dbPath = './data/faq.json';
-                if (!fs.existsSync('./data')) fs.mkdirSync('./data');
-                if (!fs.existsSync(dbPath)) fs.writeFileSync(dbPath, JSON.stringify({ faqs: [] }, null, 2));
-                const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-                const first = (pending.containers && pending.containers[0]) || null;
-                if (first) {
-                  db.faqs.push({ q: first.title || '(sem título)', a: first.description || '', createdAt: new Date().toISOString() });
-                  fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
-                }
-              } catch (err) { console.error('Erro ao salvar FAQ:', err); }
-            }
-          } catch (err) { console.error('Erro ao enviar mensagem composta:', err); }
-          client.pendingMessages.delete(key);
-          return interaction.update({ content: `Mensagem enviada em ${ch}.`, embeds: [], components: [] });
-        }
+        // acquire lock and open modal to edit selected container
+        if (interaction.client.messageLocks && interaction.client.messageLocks.has(key)) return interaction.reply({ content: 'Outra ação está em progresso neste painel. Aguarde.', ephemeral: true });
+        interaction.client.messageLocks.add(key);
+        const existing = pending.containers[idx] || {};
+        const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require('discord.js');
+        const modal = new ModalBuilder().setCustomId(`message_edit_idx:${key}:${idx}`).setTitle(`Editar container #${idx+1}`);
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_title').setLabel('Título').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(existing.title || '')),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_description').setLabel('Descrição').setStyle(TextInputStyle.Paragraph).setRequired(false).setPlaceholder(existing.description || '')),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_color').setLabel('Cor (hex)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(existing.color || '')),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_image').setLabel('URL da imagem').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(existing.image || '')),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_footer').setLabel('Footer').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(existing.footer || '')),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_fields').setLabel('Fields (uma por linha: nome|valor)').setStyle(TextInputStyle.Paragraph).setRequired(false).setPlaceholder((existing.fields || []).map(f=>`${f.name}|${f.value}`).join('\n') || ''))
+        );
+        // safety timeout to release lock
+        setTimeout(() => { if (interaction.client.messageLocks && interaction.client.messageLocks.has(key)) interaction.client.messageLocks.delete(key); }, 2 * 60 * 1000);
+        return interaction.showModal(modal);
       }
-      return;
+
+      // FAQ interactive buttons (published FAQs). Toggle answer visibility
+      // inside the published embed when a button is clicked.
+      if (id && id.startsWith('faq_page:')) {
+        // Pagination click: update the message to show target page
+        try {
+          const target = parseInt(id.split(':')[1], 10);
+          if (Number.isNaN(target)) return interaction.reply({ content: 'Página inválida.', ephemeral: true });
+          const fs = require('fs');
+          const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+          const dbPath = './data/faq.json';
+          if (!fs.existsSync(dbPath)) return interaction.reply({ content: 'Nenhuma FAQ encontrada.', ephemeral: true });
+          const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+          const chunkSize = 5;
+          const totalPages = Math.ceil(db.faqs.length / chunkSize);
+          const page = Math.max(0, Math.min(target, totalPages - 1));
+
+          const offset = page * chunkSize;
+          const slice = db.faqs.slice(offset, offset + chunkSize);
+          const embed = new EmbedBuilder().setTitle('FAQs').setTimestamp();
+          for (let j = 0; j < slice.length; j++) {
+            const idx = offset + j;
+            const q = slice[j].q;
+            const name = `#${idx} — ${q.length > 250 ? q.slice(0,250) + '...' : q}`;
+            embed.addFields({ name, value: 'Clique no botão correspondente para ver a resposta.' });
+          }
+
+          const rowQuestions = new ActionRowBuilder();
+          for (let j = 0; j < slice.length; j++) {
+            const idx = offset + j;
+            rowQuestions.addComponents(new ButtonBuilder().setCustomId(`faq_show:${idx}`).setLabel(`#${idx}`).setStyle(ButtonStyle.Primary));
+          }
+
+          const rowNav = new ActionRowBuilder();
+          const prev = new ButtonBuilder().setCustomId(`faq_page:${page-1}`).setLabel('◀️ Anterior').setStyle(ButtonStyle.Secondary).setDisabled(page <= 0);
+          const pageBadge = new ButtonBuilder().setCustomId(`faq_page_badge:${page}`).setLabel(`${page+1}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true);
+          const next = new ButtonBuilder().setCustomId(`faq_page:${page+1}`).setLabel('Próximo ▶️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages-1);
+          rowNav.addComponents(prev, pageBadge, next);
+
+          await interaction.update({ embeds: [embed], components: [rowQuestions, rowNav] });
+        } catch (err) {
+          console.error('Erro ao processar faq_page:', err);
+          if (!interaction.replied) await interaction.reply({ content: 'Erro ao navegar páginas de FAQ.', ephemeral: true });
+        }
+        return;
+      }
+
+      if (id && id.startsWith('faq_show:')) {
+        // Reply ephemeral with the answer so only the clicking user sees it.
+        try {
+          const idx = parseInt(id.split(':')[1], 10);
+          const fs = require('fs');
+          const { EmbedBuilder } = require('discord.js');
+          const dbPath = './data/faq.json';
+          if (!fs.existsSync(dbPath)) return interaction.reply({ content: 'Nenhuma FAQ encontrada.', ephemeral: true });
+          const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+          const entry = db.faqs[idx];
+          if (!entry) return interaction.reply({ content: 'FAQ não encontrada.', ephemeral: true });
+
+          const answer = entry.a.length > 4000 ? entry.a.slice(0, 3997) + '...' : entry.a;
+          const embed = new EmbedBuilder().setTitle(entry.q).setDescription(answer).setFooter({ text: 'FAQ (privado)' }).setTimestamp();
+          // Use ephemeral reply so only the user sees the answer
+          return interaction.reply({ embeds: [embed], ephemeral: true });
+        } catch (err) {
+          console.error('Erro ao processar faq_show (ephemeral):', err);
+          if (!interaction.replied) await interaction.reply({ content: 'Erro ao recuperar a resposta.', ephemeral: true });
+        }
+        return;
+      }
     }
 
     // Modal submit (for message containers)
@@ -183,8 +183,87 @@ module.exports = {
         pending.containers = pending.containers || [];
         pending.containers.push(container);
         client.pendingMessages.set(key, pending);
-
+        // release lock if present
+        try { if (interaction.client.messageLocks && interaction.client.messageLocks.has(key)) interaction.client.messageLocks.delete(key); } catch {}
         return interaction.reply({ content: 'Container adicionado ao painel. Use Pré-visualizar ou Enviar.', ephemeral: true });
+      }
+
+      // modal for editing a specific container: message_edit_idx:<key>:<index>
+      if (id && id.startsWith('message_edit_idx:')) {
+        try {
+          const parts = id.split(':');
+          const key = parts[1];
+          const idx = parseInt(parts[2], 10);
+          const pending = client.pendingMessages && client.pendingMessages.get(key);
+          if (!pending) return interaction.reply({ content: 'Sessão expirada ou inválida.', ephemeral: true });
+          if (interaction.user.id !== pending.authorId) return interaction.reply({ content: 'Apenas quem iniciou pode submeter este modal.', ephemeral: true });
+
+          if (!pending.containers || idx < 0 || idx >= pending.containers.length) return interaction.reply({ content: 'Container não encontrado.', ephemeral: true });
+
+          const existing = pending.containers[idx] || {};
+          const title = interaction.fields.getTextInputValue('c_title') || existing.title || null;
+          const description = interaction.fields.getTextInputValue('c_description') || existing.description || null;
+          const color = interaction.fields.getTextInputValue('c_color') || existing.color || null;
+          const image = interaction.fields.getTextInputValue('c_image') || existing.image || null;
+          const footer = interaction.fields.getTextInputValue('c_footer') || existing.footer || null;
+          const fieldsRaw = (interaction.fields.getTextInputValue('c_fields') || '').trim();
+          const fields = [];
+          if (fieldsRaw.length > 0) {
+            const lines = fieldsRaw.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+            for (const ln of lines) {
+              const parts = ln.split('|');
+              if (parts.length >= 2) fields.push({ name: parts[0].trim(), value: parts.slice(1).join('|').trim() });
+            }
+          } else {
+            if (existing.fields) for (const f of existing.fields) fields.push(f);
+          }
+
+          pending.containers[idx] = { title, description, color, image, footer, fields };
+          client.pendingMessages.set(key, pending);
+          try { if (interaction.client.messageLocks && interaction.client.messageLocks.has(key)) interaction.client.messageLocks.delete(key); } catch {}
+          return interaction.reply({ content: `Container #${idx+1} atualizado.`, ephemeral: true });
+        } catch (err) {
+          console.error('Erro em message_edit_idx submit:', err);
+          if (!interaction.replied) await interaction.reply({ content: 'Erro ao atualizar container.', ephemeral: true });
+        }
+      }
+
+      if (id && id.startsWith('message_edit:')) {
+        const key = id.split(':')[1];
+        const pending = client.pendingMessages && client.pendingMessages.get(key);
+        if (!pending) return interaction.reply({ content: 'Sessão expirada ou inválida.', ephemeral: true });
+        if (interaction.user.id !== pending.authorId) return interaction.reply({ content: 'Apenas quem iniciou pode submeter este modal.', ephemeral: true });
+
+        if (!pending.containers || pending.containers.length === 0) {
+          try { if (interaction.client.messageLocks && interaction.client.messageLocks.has(key)) interaction.client.messageLocks.delete(key); } catch {}
+          return interaction.reply({ content: 'Nenhum container para editar.', ephemeral: true });
+        }
+
+        const lastIndex = pending.containers.length - 1;
+        const existing = pending.containers[lastIndex] || {};
+
+        const title = interaction.fields.getTextInputValue('c_title') || existing.title || null;
+        const description = interaction.fields.getTextInputValue('c_description') || existing.description || null;
+        const color = interaction.fields.getTextInputValue('c_color') || existing.color || null;
+        const image = interaction.fields.getTextInputValue('c_image') || existing.image || null;
+        const footer = interaction.fields.getTextInputValue('c_footer') || existing.footer || null;
+        const fieldsRaw = (interaction.fields.getTextInputValue('c_fields') || '').trim();
+        const fields = [];
+        if (fieldsRaw.length > 0) {
+          const lines = fieldsRaw.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+          for (const ln of lines) {
+            const parts = ln.split('|');
+            if (parts.length >= 2) fields.push({ name: parts[0].trim(), value: parts.slice(1).join('|').trim() });
+          }
+        } else {
+          // keep existing fields if user didn't provide new
+          if (existing.fields) for (const f of existing.fields) fields.push(f);
+        }
+
+        pending.containers[lastIndex] = { title, description, color, image, footer, fields };
+        client.pendingMessages.set(key, pending);
+        try { if (interaction.client.messageLocks && interaction.client.messageLocks.has(key)) interaction.client.messageLocks.delete(key); } catch {}
+        return interaction.reply({ content: 'Container atualizado.', ephemeral: true });
       }
     }
 

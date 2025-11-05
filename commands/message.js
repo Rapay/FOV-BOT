@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, PermissionFlagsBits } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, PermissionFlagsBits, StringSelectMenuBuilder } = require('discord.js');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -32,18 +32,37 @@ module.exports = {
       interaction.client.pendingMessages.set(id, payload);
 
       // helper to create 1-2 action rows (max 5 components per row)
-      const makeRows = (id) => {
+      const DEBUG = process.env.DEBUG === '1' || process.env.DEBUG === 'true';
+
+      // messageLocks keeps track of panel ids that have an active modal/edit in progress
+      interaction.client.messageLocks = interaction.client.messageLocks || new Set();
+
+      const makeRows = (id, containers = []) => {
+        // First row: add, edit last, remove, clear, preview (<=5)
         const first = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`message_add:${id}`).setLabel('➕ Adicionar').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(`message_edit_last:${id}`).setLabel('✏️ Editar último').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId(`message_remove_last:${id}`).setLabel('🗑️ Remover').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId(`message_clear:${id}`).setLabel('🧹 Limpar').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`message_preview:${id}`).setLabel('👁️ Pré-visualizar').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`message_send:${id}`).setLabel('✅ Enviar').setStyle(ButtonStyle.Success)
+          new ButtonBuilder().setCustomId(`message_preview:${id}`).setLabel('👁️ Pré-visualizar').setStyle(ButtonStyle.Secondary)
         );
+        // Second row: send + cancel
         const second = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`message_send:${id}`).setLabel('✅ Enviar').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId(`message_cancel:${id}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
         );
-        return [first, second];
+        const rows = [first, second];
+        // If there are containers, add a select menu to choose which container to edit
+        if (containers && containers.length > 0) {
+          const options = containers.slice(0, 25).map((c, idx) => ({
+            label: `#${idx+1} ${c.title ? (c.title.length > 60 ? c.title.slice(0,57) + '...' : c.title) : '[sem título]'}`,
+            value: String(idx),
+            description: c.description ? (c.description.length > 100 ? c.description.slice(0,97) + '...' : c.description) : undefined
+          }));
+          const select = new StringSelectMenuBuilder().setCustomId(`message_select_edit:${id}`).setPlaceholder('Editar container específico...').addOptions(options).setMinValues(1).setMaxValues(1);
+          rows.push(new ActionRowBuilder().addComponents(select));
+        }
+        return rows;
       };
 
       const emptyEmbed = new EmbedBuilder()
@@ -51,7 +70,7 @@ module.exports = {
         .setDescription('Clique em "Adicionar" para criar um bloco (embed).')
         .setTimestamp();
 
-      const rows = makeRows(id);
+  const rows = makeRows(id, payload.containers);
       const panel = await interaction.reply({ embeds: [emptyEmbed], components: rows, ephemeral: true, fetchReply: true });
 
       const updatePanel = async (msg, payload) => {
@@ -65,7 +84,7 @@ module.exports = {
             .setTimestamp();
           embeds.push(summary);
         }
-        try { await msg.edit({ embeds, components: makeRows(payload.id) }); } catch (e) { /* ignore */ }
+        try { await msg.edit({ embeds, components: makeRows(payload.id, payload.containers) }); } catch (e) { /* ignore */ }
       };
 
       const collector = panel.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id, time: 15 * 60 * 1000 });
@@ -74,10 +93,18 @@ module.exports = {
         const [action, payloadId] = i.customId.split(':');
         if (payloadId !== id) return i.reply({ content: 'Painel inválido/expirado.', ephemeral: true });
 
+        // simple concurrency lock: if a modal for this panel is already open, reject
+        if (interaction.client.messageLocks.has(id)) {
+          if (DEBUG) console.log(`panel ${id} is locked, rejecting action ${action}`);
+          return i.reply({ content: 'Outra ação está em progresso neste painel. Aguarde e tente novamente.', ephemeral: true });
+        }
+
         const pm = interaction.client.pendingMessages.get(id);
         if (!pm) return i.update({ content: 'Sessão expirada.', embeds: [], components: [] });
 
         if (action === 'message_add') {
+          // set lock to prevent concurrent edits
+          interaction.client.messageLocks.add(id);
           const modal = new ModalBuilder().setCustomId(`message_modal:${id}`).setTitle('Adicionar container (embed)');
           modal.addComponents(
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_title').setLabel('Título').setStyle(TextInputStyle.Short).setRequired(false)),
@@ -87,6 +114,26 @@ module.exports = {
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_footer').setLabel('Footer').setStyle(TextInputStyle.Short).setRequired(false)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_fields').setLabel('Fields (uma por linha: nome|valor)').setStyle(TextInputStyle.Paragraph).setRequired(false))
           );
+          // safety: release lock if no modal submit within 2 minutes
+          setTimeout(() => { if (interaction.client.messageLocks.has(id)) interaction.client.messageLocks.delete(id); }, 2 * 60 * 1000);
+          return i.showModal(modal);
+        }
+
+        if (action === 'message_edit_last') {
+          if (!pm.containers || pm.containers.length === 0) return i.update({ content: 'Nenhum container para editar.', components: makeRows(id), embeds: [] });
+          interaction.client.messageLocks.add(id);
+          const last = pm.containers[pm.containers.length - 1] || {};
+          const modal = new ModalBuilder().setCustomId(`message_edit:${id}`).setTitle('Editar último container (embed)');
+          modal.addComponents(
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_title').setLabel('Título').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(last.title || '')),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_description').setLabel('Descrição').setStyle(TextInputStyle.Paragraph).setRequired(false).setPlaceholder(last.description || '')),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_color').setLabel('Cor (hex)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(last.color || '')),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_image').setLabel('URL da imagem').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(last.image || '')),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_footer').setLabel('Footer').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(last.footer || '')),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_fields').setLabel('Fields (uma por linha: nome|valor)').setStyle(TextInputStyle.Paragraph).setRequired(false).setPlaceholder((last.fields || []).map(f=>`${f.name}|${f.value}`).join('\n') || ''))
+          );
+          // safety: release lock if no modal submit within 2 minutes
+          setTimeout(() => { if (interaction.client.messageLocks.has(id)) interaction.client.messageLocks.delete(id); }, 2 * 60 * 1000);
           return i.showModal(modal);
         }
 
@@ -185,6 +232,7 @@ module.exports = {
           interaction.client.pendingMessages.delete(id);
         }
         try { panel.edit({ content: `Sessão finalizada (${reason}).`, embeds: [], components: [] }); } catch (e) { /* ignore */ }
+        try { if (interaction.client.messageLocks && interaction.client.messageLocks.has(id)) interaction.client.messageLocks.delete(id); } catch {}
       });
 
     } catch (err) {

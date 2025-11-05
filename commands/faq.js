@@ -99,22 +99,41 @@ module.exports = {
 
       if (db.faqs.length === 0) return interaction.reply({ content: 'Nenhuma FAQ cadastrada para publicar.', ephemeral: true });
 
-      // Construir e enviar embeds públicos
-      const embeds = [];
-      let embedP = new EmbedBuilder().setTitle('FAQs').setTimestamp();
-      let fieldCount = 0;
-      for (let i = 0; i < db.faqs.length; i++) {
-        const f = db.faqs[i];
-        const answer = f.a.length > 1000 ? f.a.slice(0, 1000) + '...' : f.a;
-        const name = `#${i} — ${f.q.length > 250 ? f.q.slice(0, 250) + '...' : f.q}`;
-        embedP.addFields({ name, value: answer });
-        fieldCount++;
-        if (fieldCount >= 25) { embeds.push(embedP); embedP = new EmbedBuilder().setTitle('FAQs (continuação)').setTimestamp(); fieldCount = 0; }
-      }
-      if (fieldCount > 0) embeds.push(embedP);
+      // Publicar de forma interativa com paginação: cada página contém até 5 perguntas
+      const chunkSize = 5; // max 5 question buttons per action row
+      const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+      const totalPages = Math.ceil(db.faqs.length / chunkSize);
 
-      for (const e of embeds) await channel.send({ embeds: [e] }).catch(()=>{});
-      await interaction.reply({ content: `FAQs publicadas em ${channel}`, ephemeral: true });
+      for (let page = 0; page < totalPages; page++) {
+        const offset = page * chunkSize;
+        const slice = db.faqs.slice(offset, offset + chunkSize);
+        const embed = new EmbedBuilder().setTitle('FAQs').setTimestamp();
+        for (let j = 0; j < slice.length; j++) {
+          const idx = offset + j;
+          const q = slice[j].q;
+          const name = `#${idx} — ${q.length > 250 ? q.slice(0,250) + '...' : q}`;
+          embed.addFields({ name, value: 'Clique no botão correspondente para ver a resposta.' });
+        }
+
+        // Row with question buttons (<=5)
+        const rowQuestions = new ActionRowBuilder();
+        for (let j = 0; j < slice.length; j++) {
+          const idx = offset + j;
+          const label = `#${idx}`;
+          rowQuestions.addComponents(new ButtonBuilder().setCustomId(`faq_show:${idx}`).setLabel(label).setStyle(ButtonStyle.Primary));
+        }
+
+        // Row with pagination controls: Prev, Page X/Y (disabled), Next
+        const rowNav = new ActionRowBuilder();
+        const prev = new ButtonBuilder().setCustomId(`faq_page:${page-1}`).setLabel('◀️ Anterior').setStyle(ButtonStyle.Secondary).setDisabled(page <= 0);
+        const pageBadge = new ButtonBuilder().setCustomId(`faq_page_badge:${page}`).setLabel(`${page+1}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true);
+        const next = new ButtonBuilder().setCustomId(`faq_page:${page+1}`).setLabel('Próximo ▶️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages-1);
+        rowNav.addComponents(prev, pageBadge, next);
+
+        await channel.send({ embeds: [embed], components: [rowQuestions, rowNav] }).catch(()=>{});
+      }
+
+      await interaction.reply({ content: `FAQs publicadas interativamente em ${channel}`, ephemeral: true });
 
     } else if (sub === 'set') {
       // apenas admin
@@ -141,11 +160,14 @@ module.exports = {
       interaction.client.pendingMessages.set(id, payload);
 
       const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`message_add:${id}`).setLabel('➕ Adicionar container').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(`message_remove_last:${id}`).setLabel('🗑️ Remover último').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`message_clear:${id}`).setLabel('🧹 Limpar todos').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`message_preview:${id}`).setLabel('👁️ Pré-visualizar').setStyle(ButtonStyle.Secondary),
+      // split into two rows to respect max 5 components per ActionRow
+      const row1 = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`message_add:${id}`).setLabel('➕ Adicionar').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`message_remove_last:${id}`).setLabel('🗑️ Remover').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`message_clear:${id}`).setLabel('🧹 Limpar').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`message_preview:${id}`).setLabel('👁️ Pré-visualizar').setStyle(ButtonStyle.Secondary)
+      );
+      const row2 = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId(`message_send:${id}`).setLabel('✅ Enviar').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId(`message_cancel:${id}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
       );
