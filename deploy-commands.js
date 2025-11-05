@@ -14,7 +14,11 @@ if (!token || !clientId) {
 const commands = [];
 const commandFiles = fs.readdirSync('./commands').filter(f => f.endsWith('.js'));
 for (const file of commandFiles) {
+  // skip legacy/disabled command files
+  if (file === 'announce.js') continue;
   const cmd = require(`./commands/${file}`);
+  // safety: ensure command exposes data
+  if (!cmd || !cmd.data || typeof cmd.data.toJSON !== 'function') continue;
   commands.push(cmd.data.toJSON());
 }
 
