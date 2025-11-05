@@ -7,6 +7,7 @@ module.exports = {
     .addChannelOption(opt => opt.setName('channel').setDescription('Canal padrão para enviar (opcional)').setRequired(false)),
 
   async execute(interaction) {
+    try {
     const channel = interaction.options.getChannel('channel') || interaction.channel;
     if (!channel || !channel.isTextBased()) return interaction.reply({ content: 'Canal inválido.', ephemeral: true });
 
@@ -21,14 +22,21 @@ module.exports = {
       if (!hasRole && !interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return interaction.reply({ content: 'Você não tem permissão para usar este comando.', ephemeral: true });
     } else {
       if (!interaction.member.permissions.has(PermissionFlagsBits.ManageMessages) && !interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        return interaction.reply({ content: 'Você não tem permissão para usar este comando. (Manage Messages ou Administrator necessário)', ephemeral: true });
-      }
-    }
+      // Discord limits 1-5 components per ActionRow. We split buttons into two rows.
+      const makeRow = (id) => {
+        const first = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`message_add:${id}`).setLabel('➕ Adicionar container').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(`message_remove_last:${id}`).setLabel('🗑️ Remover último').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`message_clear:${id}`).setLabel('🧹 Limpar todos').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`message_preview:${id}`).setLabel('👁️ Pré-visualizar').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`message_send:${id}`).setLabel('✅ Enviar').setStyle(ButtonStyle.Success)
+        );
+        const second = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`message_cancel:${id}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
+        );
+        return [first, second];
+      };
 
-    const id = `${Date.now()}-${Math.floor(Math.random()*10000)}`;
-    const payload = { id, authorId: interaction.user.id, channelId: channel.id, containers: [], createdAt: Date.now() };
-    interaction.client.pendingMessages = interaction.client.pendingMessages || new Map();
-    interaction.client.pendingMessages.set(id, payload);
 
     const makeRow = (id) => new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId(`message_add:${id}`).setLabel('➕ Adicionar container').setStyle(ButtonStyle.Primary),
@@ -37,7 +45,7 @@ module.exports = {
       new ButtonBuilder().setCustomId(`message_preview:${id}`).setLabel('👁️ Pré-visualizar').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`message_send:${id}`).setLabel('✅ Enviar').setStyle(ButtonStyle.Success),
       new ButtonBuilder().setCustomId(`message_cancel:${id}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
-    );
+      const panel = await interaction.reply({ embeds: [emptyEmbed], components: row, ephemeral: true, fetchReply: true });
 
     const row = makeRow(id);
 
@@ -130,49 +138,19 @@ module.exports = {
         interaction.client.pendingMessages.set(id, pm);
         await i.update({ content: 'Todos os containers foram removidos.', embeds: [], components: [makeRow(id)] });
         await updatePanel(panel, pm);
-      } else if (action === 'message_preview') {
-        // enviar pré-visualização no canal escolhido (mostrar ao usuário como será)
-        if (pm.containers.length === 0) return i.update({ content: 'Nenhum container para pré-visualizar.', components: [makeRow(id)], embeds: [] });
-        const previewEmbeds = pm.containers.map(c => {
-          const e = new EmbedBuilder();
-          if (c.title) e.setTitle(c.title);
-          if (c.description) e.setDescription(c.description);
-          if (c.color) {
-            try { e.setColor(`#${c.color}`); } catch {}
-          }
-          if (c.footer) e.setFooter({ text: c.footer });
-          return e;
-        });
-        try {
-          const ch = await interaction.client.channels.fetch(pm.channelId);
-          if (!ch || !ch.isTextBased()) throw new Error('Canal inválido');
-          await ch.send({ content: `Pré-visualização (por ${interaction.user.tag}):`, embeds: previewEmbeds });
-          await i.update({ content: 'Pré-visualização enviada no canal padrão.', components: [makeRow(id)], embeds: [] });
-          await updatePanel(panel, pm);
-        } catch (err) {
-          await i.update({ content: 'Falha ao enviar pré-visualização (não foi possível acessar o canal).', components: [makeRow(id)], embeds: [] });
-        }
-      } else if (action === 'message_send') {
-        if (pm.containers.length === 0) return i.update({ content: 'Nenhum container para enviar.', components: [makeRow(id)], embeds: [] });
-        const sendEmbeds = pm.containers.map(c => {
-          const e = new EmbedBuilder();
-          if (c.title) e.setTitle(c.title);
-          if (c.description) e.setDescription(c.description);
-          if (c.color) {
-            try { e.setColor(`#${c.color}`); } catch {}
-          }
-          if (c.footer) e.setFooter({ text: c.footer });
-          return e;
-        });
-        try {
-          const target = await interaction.client.channels.fetch(pm.channelId);
-          if (!target || !target.isTextBased()) throw new Error('Canal inválido');
-          await target.send({ embeds: sendEmbeds });
-          interaction.client.pendingMessages.delete(id);
-          await i.update({ content: 'Mensagem enviada com sucesso. Painel finalizado.', embeds: [], components: [] });
-          collector.stop('sent');
-        } catch (err) {
-          await i.update({ content: 'Erro ao enviar a mensagem (verifique permissões/canal).', components: [makeRow(id)], embeds: [] });
+      if (action === 'message_add') {
+        // mostrar modal para inputs do embed
+        // use a mesma customId que o handler global de modals espera: message_modal:<key>
+        const modalId = `message_modal:${id}`;
+        const modal = new ModalBuilder().setCustomId(modalId).setTitle('Adicionar container (embed)');
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('title').setLabel('Título (opcional)').setStyle(TextInputStyle.Short).setRequired(false)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('description').setLabel('Descrição (opcional)').setStyle(TextInputStyle.Paragraph).setRequired(false)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('color').setLabel('Cor hex (ex: #FF0000) (opcional)').setStyle(TextInputStyle.Short).setRequired(false)),
+          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('footer').setLabel('Footer (opcional)').setStyle(TextInputStyle.Short).setRequired(false))
+        );
+        await i.showModal(modal);
+      } else if (action === 'message_remove_last') {
         }
       } else if (action === 'message_cancel') {
         interaction.client.pendingMessages.delete(id);
@@ -190,5 +168,9 @@ module.exports = {
       }
       try { panel.edit({ content: `Sessão finalizada (${reason}).`, embeds: [], components: [] }); } catch (e) { /* ignore */ }
     });
+    } catch (err) {
+      console.error('Erro em /message.execute:', err);
+      if (!interaction.replied) await interaction.reply({ content: 'Ocorreu um erro interno ao abrir o painel de mensagens.', ephemeral: true });
+    }
   }
 };
