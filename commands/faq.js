@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } = require('discord.js');
 const fs = require('fs');
 
 const dataPath = './data/faq.json';
@@ -12,9 +12,10 @@ module.exports = {
     .setName('faq')
     .setDescription('Gerenciar FAQs')
     .addSubcommand(sub => sub.setName('add').setDescription('Adicionar FAQ').addStringOption(o => o.setName('q').setDescription('Pergunta').setRequired(true)).addStringOption(o => o.setName('a').setDescription('Resposta').setRequired(true)).addChannelOption(o=>o.setName('channel').setDescription('Canal para publicar esta FAQ (opcional)').setRequired(false)))
-  .addSubcommand(sub => sub.setName('list').setDescription('Listar FAQs').addBooleanOption(o=>o.setName('public').setDescription('Enviar a lista publicamente no canal (true)')).addChannelOption(o=>o.setName('channel').setDescription('Canal para publicar a lista (opcional)')))
+    .addSubcommand(sub => sub.setName('list').setDescription('Listar FAQs').addBooleanOption(o=>o.setName('public').setDescription('Enviar a lista publicamente no canal (true)')).addChannelOption(o=>o.setName('channel').setDescription('Canal para publicar a lista (opcional)')))
     .addSubcommand(sub => sub.setName('remove').setDescription('Remover FAQ por índice').addIntegerOption(o => o.setName('index').setDescription('Índice da FAQ').setRequired(true)))
     .addSubcommand(sub => sub.setName('publish').setDescription('Publicar todas as FAQs em um canal').addChannelOption(o=>o.setName('channel').setDescription('Canal onde publicar (opcional)').setRequired(false)))
+  .addSubcommand(sub => sub.setName('send').setDescription('Enviar uma FAQ usando o painel de /message').addIntegerOption(o=>o.setName('index').setDescription('Índice da FAQ').setRequired(true)).addChannelOption(o=>o.setName('channel').setDescription('Canal a enviar (opcional)').setRequired(false)).addBooleanOption(o=>o.setName('save').setDescription('Salvar este envio como FAQ (true)')))
     .addSubcommand(sub => sub.setName('set').setDescription('Configurar canal padrão de FAQ').addChannelOption(o=>o.setName('channel').setDescription('Canal padrão para publicar FAQs').setRequired(true))),
 
   async execute(interaction) {
@@ -39,6 +40,7 @@ module.exports = {
       }
 
       return interaction.reply({ content: 'FAQ adicionada.', ephemeral: true });
+
     } else if (sub === 'list') {
       if (db.faqs.length === 0) return interaction.reply({ content: 'Nenhuma FAQ cadastrada.', ephemeral: true });
 
@@ -67,8 +69,8 @@ module.exports = {
 
       if (sendPublic) {
         // escolher canal: opção > canal padrão cfg > canal do comando
-        const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        const publishChannel = targetChannel && targetChannel.isTextBased() ? targetChannel : (cfg.faqChannelId ? interaction.guild.channels.cache.get(cfg.faqChannelId) : null) || interaction.channel;
+        const cfg2 = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        const publishChannel = targetChannel && targetChannel.isTextBased() ? targetChannel : (cfg2.faqChannelId ? interaction.guild.channels.cache.get(cfg2.faqChannelId) : null) || interaction.channel;
         for (const e of embeds) {
           await publishChannel.send({ embeds: [e] }).catch(()=>{});
         }
@@ -82,12 +84,14 @@ module.exports = {
           await interaction.followUp({ embeds: [e], ephemeral: true });
         }
       }
+
     } else if (sub === 'remove') {
       const idx = interaction.options.getInteger('index');
       if (idx < 0 || idx >= db.faqs.length) return interaction.reply({ content: 'Índice inválido.', ephemeral: true });
       db.faqs.splice(idx, 1);
       fs.writeFileSync(dataPath, JSON.stringify(db, null, 2));
       await interaction.reply({ content: 'FAQ removida.', ephemeral: true });
+
     } else if (sub === 'publish') {
       // Publicar todas as FAQs em um canal (ou no canal padrão configurado)
       const channel = interaction.options.getChannel('channel') || (cfg.faqChannelId ? interaction.guild.channels.cache.get(cfg.faqChannelId) : null);
@@ -97,28 +101,56 @@ module.exports = {
 
       // Construir e enviar embeds públicos
       const embeds = [];
-      let embed = new EmbedBuilder().setTitle('FAQs').setTimestamp();
+      let embedP = new EmbedBuilder().setTitle('FAQs').setTimestamp();
       let fieldCount = 0;
       for (let i = 0; i < db.faqs.length; i++) {
         const f = db.faqs[i];
         const answer = f.a.length > 1000 ? f.a.slice(0, 1000) + '...' : f.a;
         const name = `#${i} — ${f.q.length > 250 ? f.q.slice(0, 250) + '...' : f.q}`;
-        embed.addFields({ name, value: answer });
+        embedP.addFields({ name, value: answer });
         fieldCount++;
-        if (fieldCount >= 25) { embeds.push(embed); embed = new EmbedBuilder().setTitle('FAQs (continuação)').setTimestamp(); fieldCount = 0; }
+        if (fieldCount >= 25) { embeds.push(embedP); embedP = new EmbedBuilder().setTitle('FAQs (continuação)').setTimestamp(); fieldCount = 0; }
       }
-      if (fieldCount > 0) embeds.push(embed);
+      if (fieldCount > 0) embeds.push(embedP);
 
       for (const e of embeds) await channel.send({ embeds: [e] }).catch(()=>{});
       await interaction.reply({ content: `FAQs publicadas em ${channel}`, ephemeral: true });
+
     } else if (sub === 'set') {
       // apenas admin
-      if (!interaction.member.permissions.has('Administrator')) return interaction.reply({ content: 'Apenas administradores podem configurar.', ephemeral: true });
+      if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) return interaction.reply({ content: 'Apenas administradores podem configurar.', ephemeral: true });
       const channel = interaction.options.getChannel('channel');
       if (!channel || !channel.isTextBased()) return interaction.reply({ content: 'Canal inválido.', ephemeral: true });
       cfg.faqChannelId = channel.id;
       fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
       await interaction.reply({ content: `Canal padrão de FAQ definido para ${channel}`, ephemeral: true });
+
+    } else if (sub === 'send') {
+      const idx = interaction.options.getInteger('index');
+      if (idx < 0 || idx >= db.faqs.length) return interaction.reply({ content: 'Índice inválido.', ephemeral: true });
+      const entry = db.faqs[idx];
+      const target = interaction.options.getChannel('channel') || interaction.channel;
+      if (!target || !target.isTextBased()) return interaction.reply({ content: 'Canal inválido.', ephemeral: true });
+
+      // Create pending message session and prefill with one container (the FAQ)
+      interaction.client.pendingMessages = interaction.client.pendingMessages || new Map();
+      const id = `${Date.now()}-${Math.floor(Math.random()*10000)}`;
+      const container = { title: entry.q, description: entry.a, color: null, image: null, footer: 'FAQ' };
+      const save = interaction.options.getBoolean('save') || false;
+      const payload = { id, authorId: interaction.user.id, channelId: target.id, containers: [container], createdAt: Date.now(), saveAsFAQ: !!save };
+      interaction.client.pendingMessages.set(id, payload);
+
+      const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`message_add:${id}`).setLabel('➕ Adicionar container').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`message_remove_last:${id}`).setLabel('🗑️ Remover último').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`message_clear:${id}`).setLabel('🧹 Limpar todos').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`message_preview:${id}`).setLabel('👁️ Pré-visualizar').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`message_send:${id}`).setLabel('✅ Enviar').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`message_cancel:${id}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
+      );
+      const previewEmbed = new EmbedBuilder().setTitle(container.title).setDescription(container.description).setFooter({ text: 'FAQ (preview)' }).setTimestamp();
+      return interaction.reply({ content: `Sessão de envio criada para FAQ #${idx} — canal: ${target}`, embeds: [previewEmbed], components: [row], ephemeral: true });
     }
   }
 };
