@@ -1,36 +1,21 @@
 const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const deployCommands = require('../deploy-commands');
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('restart')
-    .setDescription('Reinicia o bot: atualiza comandos e encerra o processo (apenas Owner/Administradores)')
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-    .setDMPermission(false),
-
+    .setDescription('Atualiza comandos e reinicia o bot (Admin only).')
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   async execute(interaction) {
-    const ownerId = process.env.OWNER_ID;
-    // allow either owner (if set) or administrators
-    if (ownerId && interaction.user.id !== ownerId && !interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-      return interaction.reply({ content: 'Você não tem permissão para usar este comando.', ephemeral: true });
-    }
-
-    await interaction.reply({ content: 'Reiniciando o bot: atualizando comandos (se possível) e encerrando o processo em breve...', ephemeral: true });
-
-    // attempt to deploy commands before exiting (best-effort)
+    await interaction.reply({ content: 'Iniciando deploy e reinício...', ephemeral: true });
     try {
-      const deploy = require('../deploy-commands');
-      if (typeof deploy === 'function') {
-        await deploy({ guildId: process.env.GUILD_ID });
-        console.log('deploy-commands: deploy realizado via /restart');
-      }
+      // tenta deploy imediato (usa GUILD_ID do env se presente)
+      await deployCommands();
+      console.log('Deploy executado via /restart.');
     } catch (err) {
-      console.error('Erro ao executar deploy-commands via /restart:', err);
+      console.error('Falha no deploy via /restart:', err);
     }
-
-    // give Discord a moment to deliver the reply, then exit so the host (Discloud) restarts the process
-    setTimeout(() => {
-      console.log(`Saindo por ordem de ${interaction.user.tag} (${interaction.user.id}).`);
-      process.exit(0);
-    }, 1200);
+    // fecha processo para o host reiniciar
+    setTimeout(() => process.exit(0), 1200);
   }
 };
