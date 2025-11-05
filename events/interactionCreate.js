@@ -72,12 +72,12 @@ module.exports = {
         const existing = pending.containers[idx] || {};
         const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require('discord.js');
         const modal = new ModalBuilder().setCustomId(`message_edit_idx:${key}:${idx}`).setTitle(`Editar container #${idx+1}`);
+        // Keep to 5 components (Discord limit). Footer input removed to avoid exceeding limit.
         modal.addComponents(
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_title').setLabel('Título').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(existing.title || '')),
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_description').setLabel('Descrição').setStyle(TextInputStyle.Paragraph).setRequired(false).setPlaceholder(existing.description || '')),
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_color').setLabel('Cor (hex)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(existing.color || '')),
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_image').setLabel('URL da imagem').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(existing.image || '')),
-          new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_footer').setLabel('Footer').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(existing.footer || '')),
           new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_fields').setLabel('Fields (uma por linha: nome|valor)').setStyle(TextInputStyle.Paragraph).setRequired(false).setPlaceholder((existing.fields || []).map(f=>`${f.name}|${f.value}`).join('\n') || ''))
         );
         // safety timeout to release lock
@@ -164,11 +164,12 @@ module.exports = {
         if (!pending) return interaction.reply({ content: 'Sessão expirada ou inválida.', ephemeral: true });
         if (interaction.user.id !== pending.authorId) return interaction.reply({ content: 'Apenas quem iniciou pode submeter este modal.', ephemeral: true });
 
-        const title = interaction.fields.getTextInputValue('c_title') || null;
+          const title = interaction.fields.getTextInputValue('c_title') || null;
         const description = interaction.fields.getTextInputValue('c_description') || null;
         const color = interaction.fields.getTextInputValue('c_color') || null;
         const image = interaction.fields.getTextInputValue('c_image') || null;
-        const footer = interaction.fields.getTextInputValue('c_footer') || null;
+        // footer field was removed from the modal to respect the 5-component limit
+        const footer = null;
         const fieldsRaw = (interaction.fields.getTextInputValue('c_fields') || '').trim();
         const fields = [];
         if (fieldsRaw.length > 0) {
@@ -205,7 +206,8 @@ module.exports = {
           const description = interaction.fields.getTextInputValue('c_description') || existing.description || null;
           const color = interaction.fields.getTextInputValue('c_color') || existing.color || null;
           const image = interaction.fields.getTextInputValue('c_image') || existing.image || null;
-          const footer = interaction.fields.getTextInputValue('c_footer') || existing.footer || null;
+          // footer input removed from modal; keep existing footer if present
+          const footer = existing.footer || null;
           const fieldsRaw = (interaction.fields.getTextInputValue('c_fields') || '').trim();
           const fields = [];
           if (fieldsRaw.length > 0) {
@@ -246,7 +248,8 @@ module.exports = {
         const description = interaction.fields.getTextInputValue('c_description') || existing.description || null;
         const color = interaction.fields.getTextInputValue('c_color') || existing.color || null;
         const image = interaction.fields.getTextInputValue('c_image') || existing.image || null;
-        const footer = interaction.fields.getTextInputValue('c_footer') || existing.footer || null;
+  // footer input was removed from the modal to respect component limits
+  const footer = existing.footer || null;
         const fieldsRaw = (interaction.fields.getTextInputValue('c_fields') || '').trim();
         const fields = [];
         if (fieldsRaw.length > 0) {

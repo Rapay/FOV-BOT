@@ -38,16 +38,18 @@ module.exports = {
       interaction.client.messageLocks = interaction.client.messageLocks || new Set();
 
       const makeRows = (id, containers = []) => {
-        // First row: add, edit last, remove, clear, preview (<=5)
+        // Rearranged to keep within 5 components per ActionRow and add a Refresh button
+        // First row: add, edit last, remove, clear (4 components)
         const first = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`message_add:${id}`).setLabel('➕ Adicionar').setStyle(ButtonStyle.Primary),
           new ButtonBuilder().setCustomId(`message_edit_last:${id}`).setLabel('✏️ Editar último').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId(`message_remove_last:${id}`).setLabel('🗑️ Remover').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`message_clear:${id}`).setLabel('🧹 Limpar').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`message_preview:${id}`).setLabel('👁️ Pré-visualizar').setStyle(ButtonStyle.Secondary)
+          new ButtonBuilder().setCustomId(`message_clear:${id}`).setLabel('🧹 Limpar').setStyle(ButtonStyle.Secondary)
         );
-        // Second row: send + cancel
+        // Second row: preview, refresh, send, cancel (<=5)
         const second = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`message_preview:${id}`).setLabel('👁️ Pré-visualizar').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`message_refresh:${id}`).setLabel('🔄 Atualizar').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId(`message_send:${id}`).setLabel('✅ Enviar').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId(`message_cancel:${id}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
         );
@@ -106,12 +108,13 @@ module.exports = {
           // set lock to prevent concurrent edits
           interaction.client.messageLocks.add(id);
           const modal = new ModalBuilder().setCustomId(`message_modal:${id}`).setTitle('Adicionar container (embed)');
+          // Discord modals allow a maximum of 5 components. Keep the most-used inputs
+          // and omit the footer input to stay within the limit.
           modal.addComponents(
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_title').setLabel('Título').setStyle(TextInputStyle.Short).setRequired(false)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_description').setLabel('Descrição').setStyle(TextInputStyle.Paragraph).setRequired(false)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_color').setLabel('Cor (hex)').setStyle(TextInputStyle.Short).setRequired(false)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_image').setLabel('URL da imagem').setStyle(TextInputStyle.Short).setRequired(false)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_footer').setLabel('Footer').setStyle(TextInputStyle.Short).setRequired(false)),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_fields').setLabel('Fields (uma por linha: nome|valor)').setStyle(TextInputStyle.Paragraph).setRequired(false))
           );
           // safety: release lock if no modal submit within 2 minutes
@@ -124,12 +127,13 @@ module.exports = {
           interaction.client.messageLocks.add(id);
           const last = pm.containers[pm.containers.length - 1] || {};
           const modal = new ModalBuilder().setCustomId(`message_edit:${id}`).setTitle('Editar último container (embed)');
+          // Keep to 5 components (max allowed). Footer removed from modal inputs to
+          // avoid exceeding Discord's limit; footer can still be set via other flows.
           modal.addComponents(
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_title').setLabel('Título').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(last.title || '')),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_description').setLabel('Descrição').setStyle(TextInputStyle.Paragraph).setRequired(false).setPlaceholder(last.description || '')),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_color').setLabel('Cor (hex)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(last.color || '')),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_image').setLabel('URL da imagem').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(last.image || '')),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_footer').setLabel('Footer').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(last.footer || '')),
             new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_fields').setLabel('Fields (uma por linha: nome|valor)').setStyle(TextInputStyle.Paragraph).setRequired(false).setPlaceholder((last.fields || []).map(f=>`${f.name}|${f.value}`).join('\n') || ''))
           );
           // safety: release lock if no modal submit within 2 minutes
@@ -175,6 +179,13 @@ module.exports = {
           } catch (err) {
             await i.update({ content: 'Falha ao enviar pré-visualização (não foi possível acessar o canal).', components: makeRows(id), embeds: [] });
           }
+          return;
+        }
+
+        if (action === 'message_refresh') {
+          // refresh the panel view to reflect current pending state
+          await updatePanel(panel, pm);
+          try { await i.update({ content: 'Painel atualizado.', components: makeRows(id), embeds: [] }); } catch (e) { /* ignore */ }
           return;
         }
 
