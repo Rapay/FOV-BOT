@@ -2,29 +2,27 @@ require('dotenv').config();
 const { REST, Routes } = require('discord.js');
 const fs = require('fs');
 
-const token = process.env.TOKEN;
-const clientId = process.env.CLIENT_ID;
-const guildId = process.env.GUILD_ID; // optional: for guild-scoped during development
+async function deployCommands(options = {}) {
+  const token = process.env.TOKEN;
+  const clientId = process.env.CLIENT_ID;
+  const guildId = options.guildId || process.env.GUILD_ID; // optional override
 
-if (!token || !clientId) {
-  console.error('Defina TOKEN e CLIENT_ID no .env antes de rodar deploy-commands.');
-  process.exit(1);
-}
+  if (!token || !clientId) {
+    throw new Error('Defina TOKEN e CLIENT_ID no .env antes de rodar deploy-commands.');
+  }
 
-const commands = [];
-const commandFiles = fs.readdirSync('./commands').filter(f => f.endsWith('.js'));
-for (const file of commandFiles) {
-  // skip legacy/disabled command files
-  if (file === 'announce.js') continue;
-  const cmd = require(`./commands/${file}`);
-  // safety: ensure command exposes data
-  if (!cmd || !cmd.data || typeof cmd.data.toJSON !== 'function') continue;
-  commands.push(cmd.data.toJSON());
-}
+  const commands = [];
+  const commandFiles = fs.readdirSync('./commands').filter(f => f.endsWith('.js'));
+  for (const file of commandFiles) {
+    // skip legacy/disabled command files
+    if (file === 'announce.js' || file.endsWith('.disabled.js')) continue;
+    const cmd = require(`./commands/${file}`);
+    // safety: ensure command exposes data
+    if (!cmd || !cmd.data || typeof cmd.data.toJSON !== 'function') continue;
+    commands.push(cmd.data.toJSON());
+  }
 
-const rest = new REST({ version: '10' }).setToken(token);
-
-(async () => {
+  const rest = new REST({ version: '10' }).setToken(token);
   try {
     console.log(`Registrando ${commands.length} comandos...`);
     if (guildId) {
@@ -36,5 +34,16 @@ const rest = new REST({ version: '10' }).setToken(token);
     }
   } catch (err) {
     console.error('Erro ao registrar comandos:', err);
+    throw err;
   }
-})();
+}
+
+// When run directly, execute deploy (CLI mode)
+if (require.main === module) {
+  deployCommands().catch(err => {
+    console.error(err.message || err);
+    process.exit(1);
+  });
+}
+
+module.exports = deployCommands;
