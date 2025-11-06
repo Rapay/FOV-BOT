@@ -7,6 +7,7 @@
     "start": "node index.js",
     "dev": "nodemon index.js",
     "deploy-commands": "node deploy-commands.js",
+    "deploy:guild": "node tools/deploy-guild.js",
     "list-commands": "node tools/list-registered-commands.js"
   },
   "author": "",
