@@ -9,7 +9,8 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('reactionrole')
     .setDescription('Gerenciar reaction roles (associação emoji <-> cargo)')
-    .addSubcommand(s => s.setName('post').setDescription('Publicar uma mensagem para uso com reaction-roles').addChannelOption(o=>o.setName('channel').setDescription('Canal para postar').setRequired(false)).addStringOption(o=>o.setName('content').setDescription('Conteúdo da mensagem').setRequired(true)))
+    // Required options must come before non-required ones per Discord API
+    .addSubcommand(s => s.setName('post').setDescription('Publicar uma mensagem para uso com reaction-roles').addStringOption(o=>o.setName('content').setDescription('Conteúdo da mensagem').setRequired(true)).addChannelOption(o=>o.setName('channel').setDescription('Canal para postar').setRequired(false)))
     .addSubcommand(s => s.setName('add').setDescription('Adicionar associação emoji->cargo a uma mensagem existente').addStringOption(o=>o.setName('message_id').setDescription('ID da mensagem').setRequired(true)).addStringOption(o=>o.setName('emoji').setDescription('Emoji (unicode ou custom em formato <:name:id>)').setRequired(true)).addRoleOption(o=>o.setName('role').setDescription('Cargo a atribuir').setRequired(true)))
     .addSubcommand(s => s.setName('remove').setDescription('Remover associação emoji->cargo de uma mensagem').addStringOption(o=>o.setName('message_id').setDescription('ID da mensagem').setRequired(true)).addStringOption(o=>o.setName('emoji').setDescription('Emoji').setRequired(true)))
     .addSubcommand(s => s.setName('list').setDescription('Listar associações para uma mensagem').addStringOption(o=>o.setName('message_id').setDescription('ID da mensagem').setRequired(true))),
