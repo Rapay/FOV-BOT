@@ -26,6 +26,35 @@ module.exports = {
       if (!member) return;
       if (!member.roles.cache.has(roleId)) return;
       await member.roles.remove(roleId).catch(err => console.error('Falha ao remover cargo por reação:', err));
+
+      // audit log: if configured, send a short embed to the configured audit channel
+      try {
+        const cfgPath = './data/config.json';
+        if (require('fs').existsSync(cfgPath)) {
+          const cfg = JSON.parse(require('fs').readFileSync(cfgPath, 'utf8'));
+          if (cfg && cfg.reactionAuditChannelId) {
+            const auditCh = reaction.message.guild.channels.cache.get(cfg.reactionAuditChannelId);
+            if (auditCh && auditCh.isTextBased()) {
+              const { EmbedBuilder } = require('discord.js');
+              const link = `https://discord.com/channels/${reaction.message.guild.id}/${reaction.message.channel.id}/${reaction.message.id}`;
+              const embed = new EmbedBuilder()
+                .setTitle('Reaction Role — Cargo removido')
+                .setColor(0xED4245)
+                .addFields(
+                  { name: 'Usuário', value: `${user.tag} (<@${user.id}>)`, inline: true },
+                  { name: 'Cargo', value: `<@&${roleId}>`, inline: true },
+                  { name: 'Emoji', value: `${reaction.emoji.toString()}`, inline: true }
+                )
+                .addFields(
+                  { name: 'Canal', value: `<#${reaction.message.channel.id}>`, inline: true },
+                  { name: 'Mensagem', value: `[Abrir mensagem](${link})`, inline: true }
+                )
+                .setTimestamp();
+              await auditCh.send({ embeds: [embed] }).catch(()=>{});
+            }
+          }
+        }
+      } catch (err) { console.error('Erro ao enviar audit log de reaction-role (remove):', err); }
     } catch (err) {
       console.error('Erro em messageReactionRemove handler:', err);
     }

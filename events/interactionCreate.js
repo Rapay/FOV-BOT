@@ -87,6 +87,66 @@ module.exports = {
 
       // FAQ interactive buttons (published FAQs). Toggle answer visibility
       // inside the published embed when a button is clicked.
+      // FAQ search pagination and show (interactive search sessions)
+      if (id && id.startsWith('faq_search_page:')) {
+        try {
+          const parts = id.split(':');
+          const key = parts[1];
+          const target = parseInt(parts[2], 10);
+          const session = client.pendingSearches && client.pendingSearches.get(key);
+          if (!session) return interaction.reply({ content: 'Sessão de busca expirada ou inválida.', ephemeral: true });
+          if (interaction.user.id !== session.authorId) return interaction.reply({ content: 'Apenas quem iniciou a busca pode navegar os resultados.', ephemeral: true });
+          const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+          const pageSize = 5;
+          const totalPages = Math.max(1, Math.ceil(session.results.length / pageSize));
+          const page = Number.isNaN(target) ? 0 : Math.max(0, Math.min(target, totalPages - 1));
+
+          const offset = page * pageSize;
+          const slice = session.results.slice(offset, offset + pageSize);
+          const embed = new EmbedBuilder().setTitle(`Resultados para: ${session.term}`).setTimestamp();
+          for (const item of slice) {
+            const name = `#${item.i} — ${item.q.length > 150 ? item.q.slice(0,150) + '...' : item.q}`;
+            const value = item.a.length > 300 ? item.a.slice(0,300) + '...' : item.a;
+            embed.addFields({ name, value });
+          }
+
+          const rowQuestions = new ActionRowBuilder();
+          for (const s of slice) rowQuestions.addComponents(new ButtonBuilder().setCustomId(`faq_search_show:${key}:${s.i}`).setLabel(`#${s.i}`).setStyle(ButtonStyle.Primary));
+
+          const rowNav = new ActionRowBuilder();
+          const prev = new ButtonBuilder().setCustomId(`faq_search_page:${key}:${page-1}`).setLabel('◀️ Anterior').setStyle(ButtonStyle.Secondary).setDisabled(page <= 0);
+          const pageBadge = new ButtonBuilder().setCustomId(`faq_search_page_badge:${key}:${page}`).setLabel(`${page+1}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true);
+          const next = new ButtonBuilder().setCustomId(`faq_search_page:${key}:${page+1}`).setLabel('Próximo ▶️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages-1);
+          rowNav.addComponents(prev, pageBadge, next);
+
+          await interaction.update({ embeds: [embed], components: [rowQuestions, rowNav] });
+        } catch (err) {
+          console.error('Erro ao processar faq_search_page:', err);
+          if (!interaction.replied) await interaction.reply({ content: 'Erro ao navegar resultados da busca.', ephemeral: true });
+        }
+        return;
+      }
+
+      if (id && id.startsWith('faq_search_show:')) {
+        try {
+          const parts = id.split(':');
+          const key = parts[1];
+          const idx = parseInt(parts[2], 10);
+          const session = client.pendingSearches && client.pendingSearches.get(key);
+          if (!session) return interaction.reply({ content: 'Sessão de busca expirada ou inválida.', ephemeral: true });
+          if (interaction.user.id !== session.authorId) return interaction.reply({ content: 'Apenas quem iniciou a busca pode ver os detalhes.', ephemeral: true });
+          const found = session.results.find(r => r.i === idx);
+          if (!found) return interaction.reply({ content: 'Resultado não encontrado.', ephemeral: true });
+          const { EmbedBuilder } = require('discord.js');
+          const answer = found.a.length > 4000 ? found.a.slice(0,3997) + '...' : found.a;
+          const embed = new EmbedBuilder().setTitle(found.q).setDescription(answer).setFooter({ text: 'Resultado da busca (privado)' }).setTimestamp();
+          return interaction.reply({ embeds: [embed], ephemeral: true });
+        } catch (err) {
+          console.error('Erro ao processar faq_search_show:', err);
+          if (!interaction.replied) await interaction.reply({ content: 'Erro ao recuperar o resultado.', ephemeral: true });
+        }
+        return;
+      }
       if (id && id.startsWith('faq_page:')) {
         // Pagination click: update the message to show target page
         try {

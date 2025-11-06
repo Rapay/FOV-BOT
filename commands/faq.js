@@ -16,7 +16,8 @@ module.exports = {
     .addSubcommand(sub => sub.setName('remove').setDescription('Remover FAQ por índice').addIntegerOption(o => o.setName('index').setDescription('Índice da FAQ').setRequired(true)))
     .addSubcommand(sub => sub.setName('publish').setDescription('Publicar todas as FAQs em um canal').addChannelOption(o=>o.setName('channel').setDescription('Canal onde publicar (opcional)').setRequired(false)))
   .addSubcommand(sub => sub.setName('send').setDescription('Enviar uma FAQ usando o painel de /message').addIntegerOption(o=>o.setName('index').setDescription('Índice da FAQ').setRequired(true)).addChannelOption(o=>o.setName('channel').setDescription('Canal a enviar (opcional)').setRequired(false)).addBooleanOption(o=>o.setName('save').setDescription('Salvar este envio como FAQ (true)')))
-    .addSubcommand(sub => sub.setName('set').setDescription('Configurar canal padrão de FAQ').addChannelOption(o=>o.setName('channel').setDescription('Canal padrão para publicar FAQs').setRequired(true))),
+    .addSubcommand(sub => sub.setName('set').setDescription('Configurar canal padrão de FAQ').addChannelOption(o=>o.setName('channel').setDescription('Canal padrão para publicar FAQs').setRequired(true)))
+    .addSubcommand(sub => sub.setName('search').setDescription('Buscar FAQs por palavra-chave').addStringOption(o=>o.setName('q').setDescription('Termo de busca').setRequired(true))),
 
   async execute(interaction) {
     const sub = interaction.options.getSubcommand();
@@ -172,7 +173,54 @@ module.exports = {
         new ButtonBuilder().setCustomId(`message_cancel:${id}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
       );
       const previewEmbed = new EmbedBuilder().setTitle(container.title).setDescription(container.description).setFooter({ text: 'FAQ (preview)' }).setTimestamp();
-      return interaction.reply({ content: `Sessão de envio criada para FAQ #${idx} — canal: ${target}`, embeds: [previewEmbed], components: [row], ephemeral: true });
+      return interaction.reply({ content: `Sessão de envio criada para FAQ #${idx} — canal: ${target}`, embeds: [previewEmbed], components: [row1, row2], ephemeral: true });
+    } else if (sub === 'search') {
+      const term = interaction.options.getString('q');
+      const q = term ? term.toLowerCase().trim() : '';
+      if (!q) return interaction.reply({ content: 'Termo de busca inválido.', ephemeral: true });
+      const matches = db.faqs.map((f, i) => ({ i, q: f.q, a: f.a })).filter(e => (e.q && e.q.toLowerCase().includes(q)) || (e.a && e.a.toLowerCase().includes(q)));
+      if (!matches || matches.length === 0) return interaction.reply({ content: 'Nenhuma FAQ encontrada para esse termo.', ephemeral: true });
+
+      // create a short-lived search session stored on the client so buttons can page
+      interaction.client.pendingSearches = interaction.client.pendingSearches || new Map();
+      const key = `${Date.now()}-${Math.floor(Math.random()*10000)}`;
+      const session = { id: key, authorId: interaction.user.id, term, results: matches };
+      interaction.client.pendingSearches.set(key, session);
+      // auto-expire session after 15 minutes
+      setTimeout(() => { try { interaction.client.pendingSearches.delete(key); } catch {} }, 15 * 60 * 1000);
+
+      const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+      const pageSize = 5;
+      const totalPages = Math.ceil(session.results.length / pageSize);
+      const makePage = (page) => {
+        const offset = page * pageSize;
+        const slice = session.results.slice(offset, offset + pageSize);
+        const embed = new EmbedBuilder().setTitle(`Resultados para: ${term}`).setTimestamp();
+        for (const item of slice) {
+          const name = `#${item.i} — ${item.q.length > 150 ? item.q.slice(0,150) + '...' : item.q}`;
+          const value = item.a.length > 300 ? item.a.slice(0,300) + '...' : item.a;
+          embed.addFields({ name, value });
+        }
+        return embed;
+      };
+
+      const page = 0;
+      const embed = makePage(page);
+      // build action rows: question buttons (<=5) and nav
+      const offset = 0;
+      const slice = session.results.slice(offset, offset + pageSize);
+      const rowQuestions = new ActionRowBuilder();
+      for (let j = 0; j < slice.length; j++) {
+        const idx = slice[j].i;
+        rowQuestions.addComponents(new ButtonBuilder().setCustomId(`faq_search_show:${key}:${idx}`).setLabel(`#${idx}`).setStyle(ButtonStyle.Primary));
+      }
+      const rowNav = new ActionRowBuilder();
+      const prev = new ButtonBuilder().setCustomId(`faq_search_page:${key}:${page-1}`).setLabel('◀️ Anterior').setStyle(ButtonStyle.Secondary).setDisabled(page <= 0);
+      const pageBadge = new ButtonBuilder().setCustomId(`faq_search_page_badge:${key}:${page}`).setLabel(`${page+1}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true);
+      const next = new ButtonBuilder().setCustomId(`faq_search_page:${key}:${page+1}`).setLabel('Próximo ▶️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages-1);
+      rowNav.addComponents(prev, pageBadge, next);
+
+      return interaction.reply({ embeds: [embed], components: [rowQuestions, rowNav], ephemeral: true });
     }
   }
 };

@@ -2,5 +2,6 @@
   "staffRoleId": null,
   "ticketCategoryId": null,
   "transcriptChannelId": null,
-  "faqChannelId": null
+  "faqChannelId": null,
+  "reactionAuditChannelId": null
 }
