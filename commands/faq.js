@@ -109,11 +109,16 @@ module.exports = {
         const offset = page * chunkSize;
         const slice = db.faqs.slice(offset, offset + chunkSize);
         const embed = new EmbedBuilder().setTitle('FAQs').setTimestamp();
+        // Put a single instruction under the embed title instead of repeated
+        // below each question to keep the embed compact.
+        embed.setDescription('Clique no botão correspondente para ver a resposta.');
         for (let j = 0; j < slice.length; j++) {
           const idx = offset + j;
           const q = slice[j].q;
           const name = `#${idx} — ${q.length > 250 ? q.slice(0,250) + '...' : q}`;
-          embed.addFields({ name, value: 'Clique no botão correspondente para ver a resposta.' });
+          // Field values must be non-empty, use a zero-width space to avoid
+          // visual clutter while keeping the field valid.
+          embed.addFields({ name, value: '\u200b' });
         }
 
         // Row with question buttons (<=5)

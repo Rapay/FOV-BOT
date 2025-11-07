@@ -3,6 +3,30 @@ module.exports = {
   async execute(interaction) {
     const client = interaction.client;
 
+    // Handle select menus for FAQ publish pages (customId: faq_select:<page>)
+    if (interaction.isStringSelectMenu()) {
+      const id = interaction.customId;
+      try {
+        if (id && id.startsWith('faq_select:')) {
+          const val = interaction.values && interaction.values[0];
+          const idx = parseInt(val, 10);
+          const fs = require('fs');
+          const dbPath = './data/faq.json';
+          if (!fs.existsSync(dbPath)) return interaction.reply({ content: 'Nenhuma FAQ encontrada.', ephemeral: true });
+          const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
+          const entry = db.faqs[idx];
+          if (!entry) return interaction.reply({ content: 'FAQ não encontrada.', ephemeral: true });
+          const answer = entry.a.length > 4000 ? entry.a.slice(0, 3997) + '...' : entry.a;
+          const { EmbedBuilder } = require('discord.js');
+          const embed = new EmbedBuilder().setTitle(entry.q).setDescription(answer).setFooter({ text: 'FAQ (privado)' }).setTimestamp();
+          return interaction.reply({ embeds: [embed], ephemeral: true });
+        }
+      } catch (err) {
+        console.error('Erro ao processar faq_select:', err);
+        if (!interaction.replied) await interaction.reply({ content: 'Erro ao recuperar a resposta.', ephemeral: true });
+      }
+    }
+
     // Button interactions
     if (interaction.isButton()) {
       const id = interaction.customId;
