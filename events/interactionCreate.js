@@ -172,42 +172,51 @@ module.exports = {
         return;
       }
       if (id && id.startsWith('faq_page:')) {
-        // Pagination click: update the message to show target page
+        // Pagination click: update the message to show target page (update same message)
         try {
           const target = parseInt(id.split(':')[1], 10);
           if (Number.isNaN(target)) return interaction.reply({ content: 'Página inválida.', ephemeral: true });
           const fs = require('fs');
-          const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+          const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require('discord.js');
           const dbPath = './data/faq.json';
           if (!fs.existsSync(dbPath)) return interaction.reply({ content: 'Nenhuma FAQ encontrada.', ephemeral: true });
           const db = JSON.parse(fs.readFileSync(dbPath, 'utf8'));
-          const chunkSize = 5;
-          const totalPages = Math.ceil(db.faqs.length / chunkSize);
+          const chunkSize = 25;
+          const totalPages = Math.max(1, Math.ceil(db.faqs.length / chunkSize));
           const page = Math.max(0, Math.min(target, totalPages - 1));
 
           const offset = page * chunkSize;
           const slice = db.faqs.slice(offset, offset + chunkSize);
           const embed = new EmbedBuilder().setTitle('FAQs').setTimestamp();
-          for (let j = 0; j < slice.length; j++) {
+          embed.setDescription('Clique no item do menu abaixo para ver a resposta.');
+
+          const options = slice.map((item, j) => {
             const idx = offset + j;
-            const q = slice[j].q;
-            const name = `#${idx} — ${q.length > 250 ? q.slice(0,250) + '...' : q}`;
-            embed.addFields({ name, value: 'Clique no botão correspondente para ver a resposta.' });
+            const label = `#${idx} — ${item.q.length > 60 ? item.q.slice(0,57) + '...' : item.q}`;
+            const description = item.q.length > 100 ? item.q.slice(0,100) + '...' : undefined;
+            return { label, value: String(idx), description };
+          });
+
+          const select = new StringSelectMenuBuilder()
+            .setCustomId(`faq_select:${page}`)
+            .setPlaceholder('Selecione a pergunta...')
+            .addOptions(options)
+            .setMinValues(1)
+            .setMaxValues(1);
+
+          const rowQuestions = new ActionRowBuilder().addComponents(select);
+
+          const components = [rowQuestions];
+          if (totalPages > 1) {
+            const rowNav = new ActionRowBuilder();
+            const prev = new ButtonBuilder().setCustomId(`faq_page:${page-1}`).setLabel('◀️ Anterior').setStyle(ButtonStyle.Secondary).setDisabled(page <= 0);
+            const pageBadge = new ButtonBuilder().setCustomId(`faq_page_badge:${page}`).setLabel(`${page+1}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true);
+            const next = new ButtonBuilder().setCustomId(`faq_page:${page+1}`).setLabel('Próximo ▶️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages-1);
+            rowNav.addComponents(prev, pageBadge, next);
+            components.push(rowNav);
           }
 
-          const rowQuestions = new ActionRowBuilder();
-          for (let j = 0; j < slice.length; j++) {
-            const idx = offset + j;
-            rowQuestions.addComponents(new ButtonBuilder().setCustomId(`faq_show:${idx}`).setLabel(`#${idx}`).setStyle(ButtonStyle.Primary));
-          }
-
-          const rowNav = new ActionRowBuilder();
-          const prev = new ButtonBuilder().setCustomId(`faq_page:${page-1}`).setLabel('◀️ Anterior').setStyle(ButtonStyle.Secondary).setDisabled(page <= 0);
-          const pageBadge = new ButtonBuilder().setCustomId(`faq_page_badge:${page}`).setLabel(`${page+1}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true);
-          const next = new ButtonBuilder().setCustomId(`faq_page:${page+1}`).setLabel('Próximo ▶️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages-1);
-          rowNav.addComponents(prev, pageBadge, next);
-
-          await interaction.update({ embeds: [embed], components: [rowQuestions, rowNav] });
+          await interaction.update({ embeds: [embed], components });
         } catch (err) {
           console.error('Erro ao processar faq_page:', err);
           if (!interaction.replied) await interaction.reply({ content: 'Erro ao navegar páginas de FAQ.', ephemeral: true });
