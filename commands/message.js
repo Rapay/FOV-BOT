@@ -26,8 +26,10 @@ module.exports = {
         }
       }
 
-      const id = `${Date.now()}-${Math.floor(Math.random()*10000)}`;
-      const payload = { id, authorId: interaction.user.id, channelId: channel.id, containers: [], createdAt: Date.now() };
+  const id = `${Date.now()}-${Math.floor(Math.random()*10000)}`;
+  // channelId: target channel where the final message will be sent
+  // panelChannelId: channel where the command was executed (where the user will upload attachments)
+  const payload = { id, authorId: interaction.user.id, channelId: channel.id, panelChannelId: interaction.channel ? interaction.channel.id : null, containers: [], createdAt: Date.now() };
       interaction.client.pendingMessages = interaction.client.pendingMessages || new Map();
       interaction.client.pendingMessages.set(id, payload);
 
@@ -42,9 +44,10 @@ module.exports = {
         // First row: add, edit last, remove, clear (4 components)
         const first = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`message_add:${id}`).setLabel('➕ Adicionar').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId(`message_edit_last:${id}`).setLabel('✏️ Editar último').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`message_remove_last:${id}`).setLabel('🗑️ Remover').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`message_clear:${id}`).setLabel('🧹 Limpar').setStyle(ButtonStyle.Secondary)
+            new ButtonBuilder().setCustomId(`message_edit_last:${id}`).setLabel('✏️ Editar último').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`message_upload:${id}`).setLabel('📎 Upload imagem').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(`message_remove_last:${id}`).setLabel('🗑️ Remover').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`message_clear:${id}`).setLabel('🧹 Limpar').setStyle(ButtonStyle.Secondary)
         );
         // Second row: preview, refresh, send, cancel (<=5)
         const second = new ActionRowBuilder().addComponents(
@@ -147,6 +150,47 @@ module.exports = {
           interaction.client.pendingMessages.set(id, pm);
           await i.update({ content: removed ? 'Último container removido.' : 'Nenhum container para remover.', ephemeral: true, components: makeRows(id) });
           await updatePanel(panel, pm);
+          return;
+        }
+
+        if (action === 'message_upload') {
+          pm.containers = pm.containers || [];
+          // Inform the user to upload an attachment in the target channel
+          // Prefer listening for the upload in the channel where the user opened the panel (panelChannelId)
+          let panelChannel = null;
+          try { panelChannel = pm.panelChannelId ? await interaction.client.channels.fetch(pm.panelChannelId) : null; } catch {}
+          if (!panelChannel || !panelChannel.isTextBased()) {
+            return i.reply({ content: 'Canal do painel inválido para upload. Verifique onde você executou o comando.', ephemeral: true });
+          }
+
+          await i.reply({ content: `Envie a imagem/arquivo como anexo no canal <#${pm.panelChannelId}> dentro de 60 segundos. O anexo será aplicado ao último container (ou criará um novo se não houver nenhum).`, ephemeral: true });
+
+          // Create a message collector on the panel channel to capture attachments from the same user
+          const filter = m => m.author.id === interaction.user.id && m.attachments && m.attachments.size > 0;
+          const msgCollector = panelChannel.createMessageCollector({ filter, max: 1, time: 60 * 1000 });
+
+          msgCollector.on('collect', async m => {
+            try {
+              const att = m.attachments.first();
+              if (!att) return await i.followUp({ content: 'Nenhum anexo encontrado na mensagem.', ephemeral: true });
+              const url = att.url;
+              if (!pm.containers || pm.containers.length === 0) pm.containers = [{ title: null, description: null, image: url }];
+              else pm.containers[pm.containers.length - 1].image = url;
+              interaction.client.pendingMessages.set(id, pm);
+              await i.followUp({ content: 'Imagem anexada com sucesso ao último container.', ephemeral: true });
+              await updatePanel(panel, pm);
+            } catch (err) {
+              console.error('Erro no upload de anexo:', err);
+              await i.followUp({ content: 'Erro ao processar o anexo.', ephemeral: true });
+            }
+          });
+
+          msgCollector.on('end', async collected => {
+            if (!collected || collected.size === 0) {
+              try { await i.followUp({ content: 'Tempo esgotado. Nenhum anexo recebido.', ephemeral: true }); } catch (e) {}
+            }
+          });
+
           return;
         }
 
