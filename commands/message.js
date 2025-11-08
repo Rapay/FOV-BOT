@@ -222,17 +222,35 @@ module.exports = {
                 await submitted.reply({ content: 'Abri um DM para você enviar a imagem; envie a imagem neste DM nas próximas 60s. Se não enviar, o container será adicionado sem imagem.', ephemeral: true }).catch(()=>{});
                 await dmChannel.send({ content: 'Envie a imagem para este DM nas próximas 60s; ela será anexada ao container que você está criando.' }).catch(()=>{});
 
-                // Wait for an image attachment in the DM (60s). If none is received, add the container without an image.
+                // Wait for an image attachment in the DM (60s). Provide a button in the DM so the user can signal
+                // they've finished uploading (helps when attachments are not immediately detected).
                 try {
+                  const confirmRow = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`message_dm_confirm:${id}`).setLabel('📎 Concluir upload').setStyle(ButtonStyle.Primary)
+                  );
+                  const dmPrompt = await dmChannel.send({ content: 'Envie a imagem para este DM nas próximas 60s; quando terminar, clique em "Concluir upload" abaixo.', components: [confirmRow] }).catch(()=>null);
+
                   const fdm = m => m.author.id === user.id && m.attachments && m.attachments.size > 0;
                   const mcDM = dmChannel.createMessageCollector({ filter: fdm, max: 1, time: 60 * 1000 });
+
+                  // component collector for the DM prompt button (if message was sent)
+                  let compCollector;
+                  if (dmPrompt && dmPrompt.createMessageComponentCollector) {
+                    compCollector = dmPrompt.createMessageComponentCollector({ filter: btn => btn.user.id === user.id, time: 60 * 1000, max: 1 });
+                  }
+
+                  const applyAttachment = async (attUrl) => {
+                    session.containers.push({ title, description, color: color || null, image: attUrl || null, imageText });
+                    try { await dmChannel.send({ content: attUrl ? 'Imagem recebida e aplicada ao container.' : 'Nenhuma imagem encontrada: container adicionado sem imagem.' }).catch(()=>{}); } catch {}
+                    try { await refreshPanel(); } catch {}
+                  };
 
                   mcDM.on('collect', async m => {
                     try {
                       const att = m.attachments.first();
-                      session.containers.push({ title, description, color: color || null, image: att ? att.url : null, imageText });
-                      try { await dmChannel.send({ content: 'Imagem recebida e aplicada ao container.' }).catch(()=>{}); } catch {}
-                      try { await refreshPanel(); } catch {}
+                      // stop component collector if active
+                      try { if (compCollector && !compCollector.ended) compCollector.stop('msg'); } catch(e){}
+                      await applyAttachment(att ? att.url : null);
                     } catch (err) {
                       console.error('Erro ao coletar DM de imagem:', err);
                     }
@@ -240,13 +258,49 @@ module.exports = {
 
                   mcDM.on('end', async collected => {
                     if (!collected || collected.size === 0) {
-                      session.containers.push({ title, description, color: color || null, image: null, imageText });
-                      try { await dmChannel.send({ content: 'Nenhuma imagem recebida: container adicionado sem imagem.' }).catch(()=>{}); } catch {}
-                      try { await refreshPanel(); } catch {}
+                      // if component collector also didn't fire, add without image
+                      // but wait a moment: compCollector may still be running and may provide the attachment
+                      if (!compCollector) {
+                        await applyAttachment(null);
+                      } else {
+                        // if compCollector exists, wait for it to finish before deciding
+                        // set a short timeout to let compCollector collect
+                        setTimeout(async () => {
+                          if (!compCollector.ended) {
+                            try { if (!compCollector.ended) compCollector.stop('timeout'); } catch(e){}
+                          }
+                        }, 250);
+                      }
                     }
                   });
+
+                  if (compCollector) {
+                    compCollector.on('collect', async btn => {
+                      try {
+                        await btn.reply({ content: 'Verificando imagens no DM...', ephemeral: true });
+                        // fetch recent messages and look for an attachment
+                        const recent = await dmChannel.messages.fetch({ limit: 10 }).catch(() => null);
+                        const found = recent && recent.find(m => m.author.id === user.id && m.attachments && m.attachments.size > 0);
+                        if (found) {
+                          const url = found.attachments.first().url;
+                          // stop message collector
+                          try { if (mcDM && !mcDM.ended) mcDM.stop('btn'); } catch(e){}
+                          await applyAttachment(url);
+                        } else {
+                          await dmChannel.send({ content: 'Nenhuma imagem encontrada nas mensagens recentes. Por favor anexe uma imagem e clique em Concluir upload novamente.' }).catch(()=>{});
+                        }
+                      } catch (err) {
+                        console.error('Erro ao processar confirmação DM:', err);
+                      }
+                    });
+
+                    compCollector.on('end', async () => {
+                      // if compCollector ended without collecting and message collector also ended without attachments,
+                      // ensure container was added (handled in mcDM end logic)
+                    });
+                  }
                 } catch (err) {
-                  console.error('Erro ao aguardar imagem no DM:', err);
+                  console.error('Erro ao aguardar imagem no DM (com botão):', err);
                   session.containers.push({ title, description, color: color || null, image: null, imageText });
                   try { await refreshPanel(); } catch {}
                 }
