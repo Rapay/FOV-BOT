@@ -277,6 +277,39 @@ module.exports = {
         pending.containers = pending.containers || [];
         pending.containers.push(container);
         client.pendingMessages.set(key, pending);
+        // Try to refresh the panel message (if available)
+        try {
+          if (pending.panelChannelId && pending.panelMessageId) {
+            const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require('discord.js');
+            const ch = await interaction.client.channels.fetch(pending.panelChannelId).catch(()=>null);
+            if (ch && ch.isTextBased()) {
+              const msg = await ch.messages.fetch(pending.panelMessageId).catch(()=>null);
+              if (msg) {
+                const embed = new EmbedBuilder().setTitle('Painel de criação de mensagem').setDescription(pending.containers.length ? pending.containers.map((c,i)=>`#${i+1} — ${c.title||'[sem título]'}`).join('\n\n') : 'Sem containers');
+                const makeRows = (key, containers=[]) => {
+                  const row1 = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`message_add:${key}`).setLabel('➕ Adicionar').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`message_remove_last:${key}`).setLabel('🗑️ Remover').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId(`message_upload:${key}`).setLabel('📎 Upload imagem').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`message_clear:${key}`).setLabel('🧹 Limpar').setStyle(ButtonStyle.Secondary)
+                  );
+                  const row2 = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`message_preview:${key}`).setLabel('👁️ Pré-visualizar').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId(`message_send:${key}`).setLabel('✅ Enviar').setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setCustomId(`message_cancel:${key}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
+                  );
+                  const rows = [row1, row2];
+                  if (containers && containers.length) {
+                    const opts = containers.slice(0,25).map((c,i)=>({ label: `#${i+1} ${c.title||'[sem título]'}`, value: String(i) }));
+                    rows.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`message_select_edit:${key}`).setPlaceholder('Editar container...').addOptions(opts).setMinValues(1).setMaxValues(1)));
+                  }
+                  return rows;
+                };
+                await msg.edit({ embeds: [embed], components: makeRows(key, pending.containers) }).catch(()=>{});
+              }
+            }
+          }
+        } catch (err) { console.error('Erro ao atualizar painel após adicionar container:', err); }
         // release lock if present
         try { if (interaction.client.messageLocks && interaction.client.messageLocks.has(key)) interaction.client.messageLocks.delete(key); } catch {}
         return interaction.reply({ content: 'Container adicionado ao painel. Use Pré-visualizar ou Enviar.', ephemeral: true });
@@ -315,6 +348,39 @@ module.exports = {
 
           pending.containers[idx] = { title, description, color, image, footer, fields };
           client.pendingMessages.set(key, pending);
+          // Try to refresh the panel message (if available)
+          try {
+            if (pending.panelChannelId && pending.panelMessageId) {
+              const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require('discord.js');
+              const ch = await interaction.client.channels.fetch(pending.panelChannelId).catch(()=>null);
+              if (ch && ch.isTextBased()) {
+                const msg = await ch.messages.fetch(pending.panelMessageId).catch(()=>null);
+                if (msg) {
+                  const embed = new EmbedBuilder().setTitle('Painel de criação de mensagem').setDescription(pending.containers.length ? pending.containers.map((c,i)=>`#${i+1} — ${c.title||'[sem título]'}`).join('\n\n') : 'Sem containers');
+                  const makeRows = (key, containers=[]) => {
+                    const row1 = new ActionRowBuilder().addComponents(
+                      new ButtonBuilder().setCustomId(`message_add:${key}`).setLabel('➕ Adicionar').setStyle(ButtonStyle.Primary),
+                      new ButtonBuilder().setCustomId(`message_remove_last:${key}`).setLabel('🗑️ Remover').setStyle(ButtonStyle.Secondary),
+                      new ButtonBuilder().setCustomId(`message_upload:${key}`).setLabel('📎 Upload imagem').setStyle(ButtonStyle.Primary),
+                      new ButtonBuilder().setCustomId(`message_clear:${key}`).setLabel('🧹 Limpar').setStyle(ButtonStyle.Secondary)
+                    );
+                    const row2 = new ActionRowBuilder().addComponents(
+                      new ButtonBuilder().setCustomId(`message_preview:${key}`).setLabel('👁️ Pré-visualizar').setStyle(ButtonStyle.Secondary),
+                      new ButtonBuilder().setCustomId(`message_send:${key}`).setLabel('✅ Enviar').setStyle(ButtonStyle.Success),
+                      new ButtonBuilder().setCustomId(`message_cancel:${key}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
+                    );
+                    const rows = [row1, row2];
+                    if (containers && containers.length) {
+                      const opts = containers.slice(0,25).map((c,i)=>({ label: `#${i+1} ${c.title||'[sem título]'}`, value: String(i) }));
+                      rows.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`message_select_edit:${key}`).setPlaceholder('Editar container...').addOptions(opts).setMinValues(1).setMaxValues(1)));
+                    }
+                    return rows;
+                  };
+                  await msg.edit({ embeds: [embed], components: makeRows(key, pending.containers) }).catch(()=>{});
+                }
+              }
+            }
+          } catch (err) { console.error('Erro ao atualizar painel após editar container:', err); }
           try { if (interaction.client.messageLocks && interaction.client.messageLocks.has(key)) interaction.client.messageLocks.delete(key); } catch {}
           return interaction.reply({ content: `Container #${idx+1} atualizado.`, ephemeral: true });
         } catch (err) {
@@ -358,6 +424,39 @@ module.exports = {
 
         pending.containers[lastIndex] = { title, description, color, image, footer, fields };
         client.pendingMessages.set(key, pending);
+        // Try to refresh panel message
+        try {
+          if (pending.panelChannelId && pending.panelMessageId) {
+            const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require('discord.js');
+            const ch = await interaction.client.channels.fetch(pending.panelChannelId).catch(()=>null);
+            if (ch && ch.isTextBased()) {
+              const msg = await ch.messages.fetch(pending.panelMessageId).catch(()=>null);
+              if (msg) {
+                const embed = new EmbedBuilder().setTitle('Painel de criação de mensagem').setDescription(pending.containers.length ? pending.containers.map((c,i)=>`#${i+1} — ${c.title||'[sem título]'}`).join('\n\n') : 'Sem containers');
+                const makeRows = (key, containers=[]) => {
+                  const row1 = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`message_add:${key}`).setLabel('➕ Adicionar').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`message_remove_last:${key}`).setLabel('🗑️ Remover').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId(`message_upload:${key}`).setLabel('📎 Upload imagem').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`message_clear:${key}`).setLabel('🧹 Limpar').setStyle(ButtonStyle.Secondary)
+                  );
+                  const row2 = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`message_preview:${key}`).setLabel('👁️ Pré-visualizar').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId(`message_send:${key}`).setLabel('✅ Enviar').setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setCustomId(`message_cancel:${key}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
+                  );
+                  const rows = [row1, row2];
+                  if (containers && containers.length) {
+                    const opts = containers.slice(0,25).map((c,i)=>({ label: `#${i+1} ${c.title||'[sem título]'}`, value: String(i) }));
+                    rows.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`message_select_edit:${key}`).setPlaceholder('Editar container...').addOptions(opts).setMinValues(1).setMaxValues(1)));
+                  }
+                  return rows;
+                };
+                await msg.edit({ embeds: [embed], components: makeRows(key, pending.containers) }).catch(()=>{});
+              }
+            }
+          }
+        } catch (err) { console.error('Erro ao atualizar painel após editar último container:', err); }
         try { if (interaction.client.messageLocks && interaction.client.messageLocks.has(key)) interaction.client.messageLocks.delete(key); } catch {}
         return interaction.reply({ content: 'Container atualizado.', ephemeral: true });
       }

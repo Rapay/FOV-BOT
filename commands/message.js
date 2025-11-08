@@ -52,8 +52,13 @@ module.exports = {
         return rows;
       };
 
-      const panelEmbed = new EmbedBuilder().setTitle('Painel de criação de mensagem').setDescription('Use os botões para montar sua mensagem.').setTimestamp();
-      const panel = await interaction.reply({ embeds: [panelEmbed], components: makeRows(id, session.containers), ephemeral: true, fetchReply: true });
+  // Send panel as a regular (non-ephemeral) message so we can edit it from modal handlers
+  const panelEmbed = new EmbedBuilder().setTitle('Painel de criação de mensagem').setDescription('Use os botões para montar sua mensagem.').setTimestamp();
+  const panel = await interaction.reply({ embeds: [panelEmbed], components: makeRows(id, session.containers), ephemeral: false, fetchReply: true });
+  // store panel message reference so modal submit handler can refresh it
+  session.panelChannelId = panel.channel.id;
+  session.panelMessageId = panel.id;
+  interaction.client.pendingMessages.set(id, session);
 
       const refreshPanel = async () => {
         try {
