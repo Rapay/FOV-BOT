@@ -370,7 +370,11 @@ module.exports = {
                 const advRow3 = new ActionRowBuilder().addComponents(
                   new ButtonBuilder().setCustomId(`message_edit_add_field:${id}:${idx}`).setLabel('➕ Adicionar Field').setStyle(ButtonStyle.Secondary)
                 );
-                await submitted.followUp({ content: 'Opções avançadas (opcionais):', components: [advRow1, advRow2, advRowTitle, advRow3], ephemeral: true }).catch(()=>{});
+                const advRowButtons = new ActionRowBuilder().addComponents(
+                  new ButtonBuilder().setCustomId(`message_edit_add_button_url:${id}:${idx}`).setLabel('➕ Botão (URL)').setStyle(ButtonStyle.Secondary),
+                  new ButtonBuilder().setCustomId(`message_edit_add_button_webhook:${id}:${idx}`).setLabel('➕ Botão (Webhook)').setStyle(ButtonStyle.Secondary)
+                );
+                await submitted.followUp({ content: 'Opções avançadas (opcionais):', components: [advRow1, advRow2, advRowTitle, advRowButtons, advRow3], ephemeral: true }).catch(()=>{});
               } catch (err) {
                 console.error('Erro ao enviar opções avançadas:', err);
               }
@@ -381,39 +385,120 @@ module.exports = {
             return;
           }
 
+          // Add button (URL)
+          if (action === 'message_edit_add_button_url') {
+            const idx = parseIdx();
+            if (idx === null) return i.reply({ content: 'Índice inválido.', ephemeral: true });
+            const existing = session.containers[idx];
+            if (!existing) return i.reply({ content: 'Container não encontrado.', ephemeral: true });
+            try {
+              const modal = new ModalBuilder().setCustomId(`message_modal_add_button_url:${id}:${idx}`).setTitle('Adicionar Botão (URL)');
+              modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_label').setLabel('Rótulo do botão').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_url').setLabel('URL (https://...)').setStyle(TextInputStyle.Short).setRequired(true))
+              );
+              await i.showModal(modal);
+              const submitted = await i.awaitModalSubmit({ time: 2 * 60 * 1000, filter: m => m.user.id === interaction.user.id });
+              const label = submitted.fields.getTextInputValue('b_label') || 'Abrir';
+              const url = submitted.fields.getTextInputValue('b_url') || null;
+              existing.buttons = existing.buttons || [];
+              existing.buttons.push({ type: 'url', label, url });
+              await submitted.reply({ content: 'Botão (URL) adicionado.', ephemeral: true }).catch(()=>{});
+              await refreshPanel();
+            } catch (err) {
+              console.error('Erro ao adicionar botão URL:', err);
+              return i.reply({ content: 'Erro ao adicionar botão.', ephemeral: true });
+            }
+            return;
+          }
+
+          // Add button (Webhook)
+          if (action === 'message_edit_add_button_webhook') {
+            const idx = parseIdx();
+            if (idx === null) return i.reply({ content: 'Índice inválido.', ephemeral: true });
+            const existing = session.containers[idx];
+            if (!existing) return i.reply({ content: 'Container não encontrado.', ephemeral: true });
+            try {
+              const modal = new ModalBuilder().setCustomId(`message_modal_add_button_webhook:${id}:${idx}`).setTitle('Adicionar Botão (Webhook)');
+              modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_label').setLabel('Rótulo do botão').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_webhook').setLabel('URL do webhook (https://...)').setStyle(TextInputStyle.Short).setRequired(true))
+              );
+              await i.showModal(modal);
+              const submitted = await i.awaitModalSubmit({ time: 2 * 60 * 1000, filter: m => m.user.id === interaction.user.id });
+              const label = submitted.fields.getTextInputValue('b_label') || 'Ação';
+              const webhookUrl = submitted.fields.getTextInputValue('b_webhook') || null;
+              existing.buttons = existing.buttons || [];
+              existing.buttons.push({ type: 'webhook', label, webhookUrl });
+              await submitted.reply({ content: 'Botão (Webhook) adicionado.', ephemeral: true }).catch(()=>{});
+              await refreshPanel();
+            } catch (err) {
+              console.error('Erro ao adicionar botão webhook:', err);
+              return i.reply({ content: 'Erro ao adicionar botão.', ephemeral: true });
+            }
+            return;
+          }
+
           // PREVIEW
           if (action === 'message_preview') {
             if (!session.containers.length) return i.update({ content: 'Nenhum container para pré-visualizar.', ephemeral: true, components: makeRows(id) }).catch(() => {});
-            const embeds = session.containers.map(c => {
-              const e = new EmbedBuilder();
-              if (c.authorName) e.setAuthor({ name: c.authorName, iconURL: c.authorIcon || undefined });
-              if (c.title) {
-                if (c.titleLarge) {
-                  // place the title as a bold header inside the description for a larger look
-                  const descParts = [];
-                  descParts.push(`**${c.title}**`);
-                  if (c.description) descParts.push('\n' + c.description);
-                  e.setDescription(descParts.join('\n\n'));
-                } else {
-                  e.setTitle(c.title);
-                  if (c.description) e.setDescription(c.description);
-                }
-              } else if (c.description) {
-                e.setDescription(c.description);
-              }
-              if (c.titleUrl && !c.titleLarge) e.setURL(c.titleUrl);
-              if (c.thumbnail) e.setThumbnail(c.thumbnail);
-              if (c.image) e.setImage(c.image);
-              if (c.imageText || c.footerIcon) e.setFooter({ text: c.imageText || '', iconURL: c.footerIcon || undefined });
-              if (c.timestamp) e.setTimestamp();
-              if (c.fields && Array.isArray(c.fields)) c.fields.slice(0,3).forEach(f => e.addFields({ name: f.name, value: f.value, inline: !!f.inline }));
-              return e;
-            });
             try {
               const ch = await interaction.client.channels.fetch(session.channelId);
               if (!ch || !ch.isTextBased()) throw new Error('Canal inválido');
-              await ch.send({ content: `Pré-visualização (por ${interaction.user.tag}):`, embeds });
-              await i.update({ content: 'Pré-visualização enviada no canal padrão.', components: makeRows(id) }).catch(() => {});
+              // send each container as a separate message so buttons (components) can be attached per container
+              for (let ci = 0; ci < session.containers.length; ci++) {
+                const c = session.containers[ci];
+                const e = new EmbedBuilder();
+                if (c.authorName) e.setAuthor({ name: c.authorName, iconURL: c.authorIcon || undefined });
+                if (c.title) {
+                  if (c.titleLarge) {
+                    const descParts = [];
+                    descParts.push(`**${c.title}**`);
+                    if (c.description) descParts.push('\n' + c.description);
+                    e.setDescription(descParts.join('\n\n'));
+                  } else {
+                    e.setTitle(c.title);
+                    if (c.description) e.setDescription(c.description);
+                  }
+                } else if (c.description) {
+                  e.setDescription(c.description);
+                }
+                if (c.titleUrl && !c.titleLarge) e.setURL(c.titleUrl);
+                if (c.thumbnail) e.setThumbnail(c.thumbnail);
+                if (c.image) e.setImage(c.image);
+                if (c.imageText || c.footerIcon) e.setFooter({ text: c.imageText || '', iconURL: c.footerIcon || undefined });
+                if (c.timestamp) e.setTimestamp();
+                if (c.fields && Array.isArray(c.fields)) c.fields.slice(0,3).forEach(f => e.addFields({ name: f.name, value: f.value, inline: !!f.inline }));
+
+                // build components from buttons if present
+                const components = [];
+                if (c.buttons && Array.isArray(c.buttons) && c.buttons.length) {
+                  const row = new ActionRowBuilder();
+                  for (let bi = 0; bi < c.buttons.length && bi < 5; bi++) {
+                    const b = c.buttons[bi];
+                    const btn = new ButtonBuilder().setLabel(b.label || 'Abrir');
+                    if (b.type === 'url') {
+                      btn.setStyle(ButtonStyle.Link).setURL(b.url);
+                    } else if (b.type === 'webhook') {
+                      // use a stable customId that references session id + container idx + button idx
+                      const cid = `message_button_webhook:${session.id}:${ci}:${bi}`;
+                      btn.setStyle(ButtonStyle.Primary).setCustomId(cid);
+                      // store mapping on the client so interaction handler can find webhook URL
+                      try {
+                        if (!interaction.client.messageButtonHooks) interaction.client.messageButtonHooks = new Map();
+                        interaction.client.messageButtonHooks.set(`${session.id}:${ci}:${bi}`, b.webhookUrl);
+                      } catch (e) { console.error('Erro ao registrar webhook mapping:', e); }
+                    } else {
+                      btn.setStyle(ButtonStyle.Secondary).setCustomId(`message_button:${session.id}:${ci}:${bi}`);
+                    }
+                    row.addComponents(btn);
+                  }
+                  components.push(row);
+                }
+
+                await ch.send({ content: `Pré-visualização (por ${interaction.user.tag}):`, embeds: [e], components }).catch(() => {});
+              }
+              await i.update({ content: 'Pré-visualização(s) enviadas no canal padrão.', components: makeRows(id) }).catch(() => {});
             } catch (err) {
               console.error('preview error', err);
               await i.update({ content: 'Falha ao enviar pré-visualização.', components: makeRows(id) }).catch(() => {});
@@ -449,7 +534,25 @@ module.exports = {
                 if (c.imageText || c.footerIcon) e.setFooter({ text: c.imageText || '', iconURL: c.footerIcon || undefined });
                 if (c.timestamp) e.setTimestamp();
                 if (c.fields && Array.isArray(c.fields)) c.fields.slice(0,3).forEach(f => e.addFields({ name: f.name, value: f.value, inline: !!f.inline }));
-                await ch.send({ embeds: [e] }).catch(() => {});
+                // build components from buttons if present (for sending)
+                const components = [];
+                if (c.buttons && Array.isArray(c.buttons) && c.buttons.length) {
+                  const row = new ActionRowBuilder();
+                  for (let bi = 0; bi < c.buttons.length && bi < 5; bi++) {
+                    const b = c.buttons[bi];
+                    const btn = new ButtonBuilder().setLabel(b.label || 'Abrir');
+                    if (b.type === 'url') btn.setStyle(ButtonStyle.Link).setURL(b.url);
+                    else if (b.type === 'webhook') {
+                      const cid = `message_button_webhook:${session.id}:${ci}:${bi}`;
+                      btn.setStyle(ButtonStyle.Primary).setCustomId(cid);
+                      try { if (!interaction.client.messageButtonHooks) interaction.client.messageButtonHooks = new Map(); interaction.client.messageButtonHooks.set(`${session.id}:${ci}:${bi}`, b.webhookUrl); } catch(e) { console.error(e); }
+                    } else btn.setStyle(ButtonStyle.Secondary).setCustomId(`message_button:${session.id}:${ci}:${bi}`);
+                    row.addComponents(btn);
+                  }
+                  components.push(row);
+                }
+
+                await ch.send({ embeds: [e], components }).catch(() => {});
               }
               await i.update({ content: 'Mensagem(s) enviadas.', embeds: [], components: [] }).catch(() => {});
               collector.stop('sent');

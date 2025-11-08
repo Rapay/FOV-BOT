@@ -128,6 +128,43 @@ module.exports = {
         return;
       }
 
+      // Message buttons that trigger configured webhooks
+      if (id && id.startsWith('message_button_webhook:')) {
+        try {
+          const parts = id.split(':');
+          // customId format: message_button_webhook:<sessionId>:<containerIdx>:<buttonIdx>
+          const sessionKey = `${parts[1]}:${parts[2]}:${parts[3]}`;
+          const hooks = client.messageButtonHooks;
+          if (!hooks || !hooks.has(sessionKey)) return interaction.reply({ content: 'Ação não configurada ou expirada.', ephemeral: true });
+          const webhookUrl = hooks.get(sessionKey);
+          if (!webhookUrl) return interaction.reply({ content: 'Webhook inválido.', ephemeral: true });
+
+          // perform a POST to the webhook URL with a simple JSON payload
+          try {
+            const { URL } = require('url');
+            const https = require('https');
+            const parsed = new URL(webhookUrl);
+            const payload = JSON.stringify({ userId: interaction.user.id, userTag: interaction.user.tag, messageId: interaction.message.id, channelId: interaction.channelId, guildId: interaction.guildId });
+            const options = { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } };
+            const req = https.request(parsed, options, res => {
+              // ignore response body
+            });
+            req.on('error', e => { console.error('Erro ao chamar webhook:', e); });
+            req.write(payload);
+            req.end();
+          } catch (err) {
+            console.error('Erro ao executar webhook:', err);
+            return interaction.reply({ content: 'Falha ao executar a ação do webhook.', ephemeral: true });
+          }
+
+          return interaction.reply({ content: 'Ação executada (webhook acionado).', ephemeral: true });
+        } catch (err) {
+          console.error('Erro ao processar message_button_webhook:', err);
+          if (!interaction.replied) await interaction.reply({ content: 'Erro ao processar ação.', ephemeral: true });
+        }
+        return;
+      }
+
       if (id && id.startsWith('faq_search_show:')) {
         try {
           const parts = id.split(':');
