@@ -56,7 +56,7 @@ module.exports = {
       for (let i = 0; i < db.faqs.length; i++) {
         const f = db.faqs[i];
         const answer = f.a.length > 1000 ? f.a.slice(0, 1000) + '...' : f.a;
-        const name = `#${i} — ${f.q.length > 250 ? f.q.slice(0, 250) + '...' : f.q}`;
+        const name = `${f.q.length > 250 ? f.q.slice(0, 250) + '...' : f.q}`;
         embed.addFields({ name, value: answer });
         fieldCount++;
 
@@ -114,7 +114,7 @@ module.exports = {
 
         const options = slice.map((item, j) => {
           const idx = offset + j;
-          const label = `#${idx} — ${item.q.length > 60 ? item.q.slice(0,57) + '...' : item.q}`;
+          const label = `${item.q.length > 100 ? item.q.slice(0,97) + '...' : item.q}`;
           const description = item.q.length > 100 ? item.q.slice(0,100) + '...' : undefined;
           return { label, value: String(idx), description };
         });
@@ -163,7 +163,7 @@ module.exports = {
       // Create pending message session and prefill with one container (the FAQ)
       interaction.client.pendingMessages = interaction.client.pendingMessages || new Map();
       const id = `${Date.now()}-${Math.floor(Math.random()*10000)}`;
-      const container = { title: entry.q, description: entry.a, color: null, image: null, footer: 'FAQ' };
+  const container = { title: entry.q, description: entry.a, color: null, image: null, footer: 'FAQ' };
       const save = interaction.options.getBoolean('save') || false;
       const payload = { id, authorId: interaction.user.id, channelId: target.id, containers: [container], createdAt: Date.now(), saveAsFAQ: !!save };
       interaction.client.pendingMessages.set(id, payload);
@@ -180,8 +180,8 @@ module.exports = {
         new ButtonBuilder().setCustomId(`message_send:${id}`).setLabel('✅ Enviar').setStyle(ButtonStyle.Success),
         new ButtonBuilder().setCustomId(`message_cancel:${id}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
       );
-      const previewEmbed = new EmbedBuilder().setTitle(container.title).setDescription(container.description).setFooter({ text: 'FAQ (preview)' }).setTimestamp();
-      return interaction.reply({ content: `Sessão de envio criada para FAQ #${idx} — canal: ${target}`, embeds: [previewEmbed], components: [row1, row2], ephemeral: true });
+  const previewEmbed = new EmbedBuilder().setTitle(container.title).setDescription(container.description).setFooter({ text: 'FAQ (preview)' }).setTimestamp();
+  return interaction.reply({ content: `Sessão de envio criada para FAQ — ${container.title} — canal: ${target}`, embeds: [previewEmbed], components: [row1, row2], ephemeral: true });
     } else if (sub === 'search') {
       const term = interaction.options.getString('q');
       const q = term ? term.toLowerCase().trim() : '';
@@ -205,7 +205,7 @@ module.exports = {
         const slice = session.results.slice(offset, offset + pageSize);
         const embed = new EmbedBuilder().setTitle(`Resultados para: ${term}`).setTimestamp();
         for (const item of slice) {
-          const name = `#${item.i} — ${item.q.length > 150 ? item.q.slice(0,150) + '...' : item.q}`;
+          const name = `${item.q.length > 150 ? item.q.slice(0,150) + '...' : item.q}`;
           const value = item.a.length > 300 ? item.a.slice(0,300) + '...' : item.a;
           embed.addFields({ name, value });
         }
@@ -220,7 +220,8 @@ module.exports = {
       const rowQuestions = new ActionRowBuilder();
       for (let j = 0; j < slice.length; j++) {
         const idx = slice[j].i;
-        rowQuestions.addComponents(new ButtonBuilder().setCustomId(`faq_search_show:${key}:${idx}`).setLabel(`#${idx}`).setStyle(ButtonStyle.Primary));
+        const label = `${slice[j].q.length > 80 ? slice[j].q.slice(0,77) + '...' : slice[j].q}`;
+        rowQuestions.addComponents(new ButtonBuilder().setCustomId(`faq_search_show:${key}:${idx}`).setLabel(label).setStyle(ButtonStyle.Primary));
       }
       const rowNav = new ActionRowBuilder();
       const prev = new ButtonBuilder().setCustomId(`faq_search_page:${key}:${page-1}`).setLabel('◀️ Anterior').setStyle(ButtonStyle.Secondary).setDisabled(page <= 0);

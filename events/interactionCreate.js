@@ -8,6 +8,7 @@ module.exports = {
       const id = interaction.customId;
       try {
         if (id && id.startsWith('faq_select:')) {
+          // When a published FAQ select is used, update the original message with the selected answer
           const val = interaction.values && interaction.values[0];
           const idx = parseInt(val, 10);
           const fs = require('fs');
@@ -18,8 +19,14 @@ module.exports = {
           if (!entry) return interaction.reply({ content: 'FAQ não encontrada.', ephemeral: true });
           const answer = entry.a.length > 4000 ? entry.a.slice(0, 3997) + '...' : entry.a;
           const { EmbedBuilder } = require('discord.js');
-          const embed = new EmbedBuilder().setTitle(entry.q).setDescription(answer).setFooter({ text: 'FAQ (privado)' }).setTimestamp();
-          return interaction.reply({ embeds: [embed], ephemeral: true });
+          const embed = new EmbedBuilder().setTitle(entry.q).setDescription(answer).setFooter({ text: 'FAQ' }).setTimestamp();
+          // Update the original published message so switching selection replaces the previous answer
+          try {
+            await interaction.update({ embeds: [embed], components: interaction.message.components });
+          } catch (err) {
+            // fallback to ephemeral if update fails
+            return interaction.reply({ embeds: [embed], ephemeral: true });
+          }
         }
       } catch (err) {
         console.error('Erro ao processar faq_select:', err);
