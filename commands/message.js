@@ -24,7 +24,7 @@ module.exports = {
       }
 
   const id = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-  const session = { id, authorId: interaction.user.id, channelId: channel.id, panelChannelId: null, containers: [], pendingImage: null };
+  const session = { id, authorId: interaction.user.id, channelId: channel.id, panelChannelId: null, containers: [] };
 
       const makeRows = (key, containers = []) => {
         const rows = [];
@@ -38,9 +38,7 @@ module.exports = {
         }
         const row1 = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`message_add:${key}`).setLabel('➕ Adicionar').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId(`message_remove_last:${key}`).setLabel('🗑️ Remover').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`message_clear:${key}`).setLabel('🧹 Limpar').setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder().setCustomId(`message_upload_dm:${key}`).setLabel('📤 Upload (DM)').setStyle(ButtonStyle.Secondary)
+          new ButtonBuilder().setCustomId(`message_remove_last:${key}`).setLabel('🗑️ Remover').setStyle(ButtonStyle.Secondary)
         );
         const row2 = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`message_preview:${key}`).setLabel('👁️ Pré-visualizar').setStyle(ButtonStyle.Secondary),
@@ -51,7 +49,7 @@ module.exports = {
         return rows;
       };
 
-      const panelEmbed = new EmbedBuilder().setTitle('Painel de criação de mensagem').setDescription('Use os botões para montar sua mensagem. (Sem salvamento)').setTimestamp();
+  const panelEmbed = new EmbedBuilder().setTitle('Painel de criação de mensagem').setDescription('Use os botões para montar sua mensagem (sem salvamento).\nAdicionar: cria um novo container (pode anexar imagem via DM). Pré-visualizar: envia uma prévia. Enviar: publica os embeds no canal selecionado.').setTimestamp();
       const panel = await interaction.reply({ embeds: [panelEmbed], components: makeRows(id), ephemeral: false, fetchReply: true });
       session.panelChannelId = panel.channel.id;
 
@@ -59,12 +57,7 @@ module.exports = {
         const embed = new EmbedBuilder();
         if (!session.containers.length) embed.setTitle('Sem containers');
         else embed.setTitle('Containers:').setDescription(session.containers.map((c, i) => `#${i+1} — ${c.title || '[sem título]'}`).join('\n'));
-        // indicate pending pre-upload image if present
-        if (session.pendingImage) {
-          embed.setDescription((embed.data.description ? embed.data.description + '\n\n' : '') + '📤 Imagem pré-carregada disponível para uso (clique em Adicionar e escolha "Usar imagem pré-carregada").');
-          // show a small thumbnail preview of the pending image in the panel
-          try { embed.setThumbnail(session.pendingImage); } catch (e) { }
-        }
+        // note: no persistent pre-upload image feature anymore
         try { await panel.edit({ embeds: [embed], components: makeRows(id) }); } catch (e) { }
       };
 
@@ -187,6 +180,18 @@ module.exports = {
                 }
                 return;
               }
+
+          // toggle title-large (use the title as a big header in the description)
+          if (action === 'message_edit_toggle_titlelarge') {
+            const idx = parseIdx();
+            if (idx === null) return i.reply({ content: 'Índice inválido.', ephemeral: true });
+            const existing = session.containers[idx];
+            if (!existing) return i.reply({ content: 'Container não encontrado.', ephemeral: true });
+            existing.titleLarge = !existing.titleLarge;
+            await i.reply({ content: `Título grande ${existing.titleLarge ? 'ativado' : 'desativado'} para o container #${idx+1}.`, ephemeral: true }).catch(()=>{});
+            await refreshPanel();
+            return;
+          }
             } catch (err) {
               console.error('Erro nas opções avançadas:', err);
               return i.reply({ content: 'Erro nas opções avançadas.', ephemeral: true });
@@ -210,15 +215,6 @@ module.exports = {
               const color = submitted.fields.getTextInputValue('c_color') || null;
               const imageText = submitted.fields.getTextInputValue('c_image_text') || null;
 
-              // If the user previously pre-uploaded an image via the panel Upload (DM) button, use it immediately
-              if (session.pendingImage) {
-                session.containers.push({ title, description, color: color || null, image: session.pendingImage, imageText });
-                session.pendingImage = null;
-                try { await submitted.reply({ content: 'Imagem pré-carregada aplicada ao container.', ephemeral: true }).catch(()=>{}); } catch {}
-                try { await refreshPanel(); } catch {}
-                return;
-              }
-
               // Auto-open DM and wait for image (60s)
               try {
                 const user = interaction.user;
@@ -226,49 +222,22 @@ module.exports = {
                 await submitted.reply({ content: 'Abri um DM para você enviar a imagem; envie a imagem neste DM nas próximas 60s. Se não enviar, o container será adicionado sem imagem.', ephemeral: true }).catch(()=>{});
                 await dmChannel.send({ content: 'Envie a imagem para este DM nas próximas 60s; ela será anexada ao container que você está criando.' }).catch(()=>{});
 
-                // First check recent DM messages for a pre-sent attachment so we can confirm immediately
+                // Wait for an image attachment in the DM (60s). If none is received, add the container without an image.
                 try {
-                  const recent = await dmChannel.messages.fetch({ limit: 10 }).catch(() => null);
-                  const found = recent && recent.find(m => m.author.id === user.id && m.attachments && m.attachments.size > 0);
-                  if (found) {
-                    const att = found.attachments.first();
-                    session.containers.push({ title, description, color: color || null, image: att ? att.url : null, imageText });
-                    try { await dmChannel.send({ content: 'Imagem já encontrada no DM e aplicada ao container.' }).catch(()=>{}); } catch {}
-                    try { await refreshPanel(); } catch {}
-                  } else {
-                    const fdm = m => m.author.id === user.id && m.attachments && m.attachments.size > 0;
-                    const mcDM = dmChannel.createMessageCollector({ filter: fdm, max: 1, time: 60 * 1000 });
-
-                    mcDM.on('collect', async m => {
-                      try {
-                        const att = m.attachments.first();
-                        session.containers.push({ title, description, color: color || null, image: att ? att.url : null, imageText });
-                        try { await dmChannel.send({ content: 'Imagem recebida e aplicada ao container.' }).catch(()=>{}); } catch {}
-                        try { await refreshPanel(); } catch {}
-                      } catch (err) {
-                        console.error('Erro ao coletar DM de imagem:', err);
-                      }
-                    });
-
-                    mcDM.on('end', async collected => {
-                      if (!collected || collected.size === 0) {
-                        session.containers.push({ title, description, color: color || null, image: null, imageText });
-                        try { await dmChannel.send({ content: 'Nenhuma imagem recebida: container adicionado sem imagem.' }).catch(()=>{}); } catch {}
-                        try { await refreshPanel(); } catch {}
-                      }
-                    });
-                  }
-                } catch (err) {
-                  console.error('Erro ao verificar mensagens recentes no DM:', err);
-                  // fallback to collector behavior
                   const fdm = m => m.author.id === user.id && m.attachments && m.attachments.size > 0;
                   const mcDM = dmChannel.createMessageCollector({ filter: fdm, max: 1, time: 60 * 1000 });
+
                   mcDM.on('collect', async m => {
-                    const att = m.attachments.first();
-                    session.containers.push({ title, description, color: color || null, image: att ? att.url : null, imageText });
-                    try { await dmChannel.send({ content: 'Imagem recebida e aplicada ao container.' }).catch(()=>{}); } catch {}
-                    try { await refreshPanel(); } catch {}
+                    try {
+                      const att = m.attachments.first();
+                      session.containers.push({ title, description, color: color || null, image: att ? att.url : null, imageText });
+                      try { await dmChannel.send({ content: 'Imagem recebida e aplicada ao container.' }).catch(()=>{}); } catch {}
+                      try { await refreshPanel(); } catch {}
+                    } catch (err) {
+                      console.error('Erro ao coletar DM de imagem:', err);
+                    }
                   });
+
                   mcDM.on('end', async collected => {
                     if (!collected || collected.size === 0) {
                       session.containers.push({ title, description, color: color || null, image: null, imageText });
@@ -276,6 +245,10 @@ module.exports = {
                       try { await refreshPanel(); } catch {}
                     }
                   });
+                } catch (err) {
+                  console.error('Erro ao aguardar imagem no DM:', err);
+                  session.containers.push({ title, description, color: color || null, image: null, imageText });
+                  try { await refreshPanel(); } catch {}
                 }
               } catch (err) {
                 console.error('Erro ao abrir DM para upload automático:', err);
@@ -289,13 +262,6 @@ module.exports = {
             return;
           }
 
-          // CLEAR
-          if (action === 'message_clear') {
-            session.containers = [];
-            await i.update({ content: 'Containers limpos.', ephemeral: true, components: makeRows(id) }).catch(() => {});
-            return await refreshPanel();
-          }
-
           // REMOVE LAST
           if (action === 'message_remove_last') {
             session.containers = session.containers || [];
@@ -305,47 +271,7 @@ module.exports = {
             return;
           }
 
-          // UPLOAD (DM) - pre-upload an image to use for next container
-          if (action === 'message_upload_dm') {
-            try {
-              const user = interaction.user;
-              const dmChannel = await user.createDM();
-              // Inform the user and instruct
-              try { await i.reply({ content: 'Abri um DM para receber sua imagem. Se você já enviou uma imagem neste DM, ela será usada imediatamente; caso contrário, envie-a agora (60s).', ephemeral: true }); } catch {}
-              await dmChannel.send({ content: 'Envie a imagem para este DM (pré-upload). Ela será aplicada ao próximo container que você criar.' }).catch(()=>{});
-
-              // check recent messages for an image first
-              const recent = await dmChannel.messages.fetch({ limit: 10 }).catch(() => null);
-              const found = recent && recent.find(m => m.author.id === user.id && m.attachments && m.attachments.size > 0);
-              if (found) {
-                session.pendingImage = found.attachments.first().url;
-                try { await dmChannel.send({ content: 'Imagem pré-existente encontrada e salva para uso.' }).catch(()=>{}); } catch {}
-                try { await i.followUp({ content: 'Imagem pré-carregada encontrada e será usada no próximo container.', ephemeral: true }); } catch {}
-                try { await refreshPanel(); } catch {}
-                return;
-              }
-
-              // otherwise wait for a new attachment
-              const fdm = m => m.author.id === user.id && m.attachments && m.attachments.size > 0;
-              const mc = dmChannel.createMessageCollector({ filter: fdm, max: 1, time: 60 * 1000 });
-              mc.on('collect', async m => {
-                session.pendingImage = m.attachments.first().url;
-                try { await dmChannel.send({ content: 'Imagem recebida e salva para uso no próximo container.' }).catch(()=>{}); } catch {}
-                try { await i.followUp({ content: 'Imagem recebida e salva para uso no próximo container.', ephemeral: true }); } catch {}
-                try { await refreshPanel(); } catch {}
-              });
-              mc.on('end', async collected => {
-                if (!collected || collected.size === 0) {
-                  try { await dmChannel.send({ content: 'Tempo esgotado: nenhuma imagem recebida.' }).catch(()=>{}); } catch {}
-                  try { await i.followUp({ content: 'Nenhuma imagem recebida.', ephemeral: true }); } catch {}
-                }
-              });
-            } catch (err) {
-              console.error('Erro no upload DM:', err);
-              try { await i.reply({ content: 'Falha ao abrir DM para upload.', ephemeral: true }); } catch {}
-            }
-            return;
-          }
+          // UPLOAD (DM) pre-upload removed (feature deprecated)
 
           // EDIT SELECT
           if (action === 'message_select_edit') {
@@ -368,7 +294,7 @@ module.exports = {
               const sessionColor = submitted.fields.getTextInputValue('c_color') || existing.color || null;
               const imageText = submitted.fields.getTextInputValue('c_image_text') || existing.imageText || null;
               session.containers[idx] = { title, description, color: sessionColor || null, image: existing.image || null, imageText };
-              await submitted.reply({ content: `Container #${idx+1} atualizado.`, ephemeral: true });
+                await submitted.reply({ content: `Container #${idx+1} atualizado.`, ephemeral: true });
               await refreshPanel();
 
               // Offer advanced edit options via ephemeral buttons (author, icons (DM-only), title URL, timestamp, fields)
@@ -383,10 +309,14 @@ module.exports = {
                   new ButtonBuilder().setCustomId(`message_edit_upload_footericon:${id}:${idx}`).setLabel('📤 Footer Icon (DM)').setStyle(ButtonStyle.Secondary),
                   new ButtonBuilder().setCustomId(`message_edit_toggle_timestamp:${id}:${idx}`).setLabel('⏱️ Toggle Timestamp').setStyle(ButtonStyle.Secondary)
                 );
+                // add title-large toggle to allow using the title as a big header in the description
+                const advRowTitle = new ActionRowBuilder().addComponents(
+                  new ButtonBuilder().setCustomId(`message_edit_toggle_titlelarge:${id}:${idx}`).setLabel('⬆️ Título grande').setStyle(ButtonStyle.Secondary)
+                );
                 const advRow3 = new ActionRowBuilder().addComponents(
                   new ButtonBuilder().setCustomId(`message_edit_add_field:${id}:${idx}`).setLabel('➕ Adicionar Field').setStyle(ButtonStyle.Secondary)
                 );
-                await submitted.followUp({ content: 'Opções avançadas (opcionais):', components: [advRow1, advRow2, advRow3], ephemeral: true }).catch(()=>{});
+                await submitted.followUp({ content: 'Opções avançadas (opcionais):', components: [advRow1, advRow2, advRowTitle, advRow3], ephemeral: true }).catch(()=>{});
               } catch (err) {
                 console.error('Erro ao enviar opções avançadas:', err);
               }
@@ -403,9 +333,21 @@ module.exports = {
             const embeds = session.containers.map(c => {
               const e = new EmbedBuilder();
               if (c.authorName) e.setAuthor({ name: c.authorName, iconURL: c.authorIcon || undefined });
-              if (c.title) e.setTitle(c.title);
-              if (c.titleUrl) e.setURL(c.titleUrl);
-              if (c.description) e.setDescription(c.description);
+              if (c.title) {
+                if (c.titleLarge) {
+                  // place the title as a bold header inside the description for a larger look
+                  const descParts = [];
+                  descParts.push(`**${c.title}**`);
+                  if (c.description) descParts.push('\n' + c.description);
+                  e.setDescription(descParts.join('\n\n'));
+                } else {
+                  e.setTitle(c.title);
+                  if (c.description) e.setDescription(c.description);
+                }
+              } else if (c.description) {
+                e.setDescription(c.description);
+              }
+              if (c.titleUrl && !c.titleLarge) e.setURL(c.titleUrl);
               if (c.thumbnail) e.setThumbnail(c.thumbnail);
               if (c.image) e.setImage(c.image);
               if (c.imageText || c.footerIcon) e.setFooter({ text: c.imageText || '', iconURL: c.footerIcon || undefined });
@@ -434,9 +376,20 @@ module.exports = {
               for (const c of session.containers) {
                 const e = new EmbedBuilder();
                 if (c.authorName) e.setAuthor({ name: c.authorName, iconURL: c.authorIcon || undefined });
-                if (c.title) e.setTitle(c.title);
-                if (c.titleUrl) e.setURL(c.titleUrl);
-                if (c.description) e.setDescription(c.description);
+                if (c.title) {
+                  if (c.titleLarge) {
+                    const descParts = [];
+                    descParts.push(`**${c.title}**`);
+                    if (c.description) descParts.push('\n' + c.description);
+                    e.setDescription(descParts.join('\n\n'));
+                  } else {
+                    e.setTitle(c.title);
+                    if (c.description) e.setDescription(c.description);
+                  }
+                } else if (c.description) {
+                  e.setDescription(c.description);
+                }
+                if (c.titleUrl && !c.titleLarge) e.setURL(c.titleUrl);
                 if (c.thumbnail) e.setThumbnail(c.thumbnail);
                 if (c.image) e.setImage(c.image);
                 if (c.imageText || c.footerIcon) e.setFooter({ text: c.imageText || '', iconURL: c.footerIcon || undefined });
