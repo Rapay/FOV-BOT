@@ -75,6 +75,101 @@ module.exports = {
         return interaction.update({ content: 'Envio de anúncio cancelado.', embeds: [], components: [] });
       }
 
+      // Draft-specific buttons for the message panel (add-flow):
+      if (id && id.startsWith('message_draft_')) {
+        try {
+          const parts = id.split(':');
+          const cmd = parts[0].split('_')[2]; // e.g. 'fill'|'upload'|'confirm'|'cancel'
+          const key = parts[1];
+          const pending = client.pendingMessages && client.pendingMessages.get(key);
+          if (!pending) return interaction.reply({ content: 'Sessão expirada ou inválida.', ephemeral: true });
+          if (interaction.user.id !== pending.authorId) return interaction.reply({ content: 'Apenas quem iniciou pode usar este fluxo.', ephemeral: true });
+
+          // Fill -> open a modal to edit draft
+          if (cmd === 'fill') {
+            const { ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require('discord.js');
+            const modal = new ModalBuilder().setCustomId(`message_modal_draft:${key}`).setTitle('Preencher novo container (rascunho)');
+            modal.addComponents(
+              new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_title').setLabel('Título').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(pending.draft && pending.draft.title ? pending.draft.title : '')),
+              new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_description').setLabel('Descrição').setStyle(TextInputStyle.Paragraph).setRequired(false).setPlaceholder(pending.draft && pending.draft.description ? pending.draft.description : '')),
+              new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_image').setLabel('URL da imagem (opcional)').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(pending.draft && pending.draft.image ? pending.draft.image : ''))
+            );
+            return interaction.showModal(modal);
+          }
+
+          // Upload -> wait for an attachment in the panel channel and save into draft.image
+          if (cmd === 'upload') {
+            const panelChannel = pending.panelChannelId ? await interaction.client.channels.fetch(pending.panelChannelId).catch(() => null) : null;
+            if (!panelChannel || !panelChannel.isTextBased()) return interaction.reply({ content: 'Canal do painel inválido para upload.', ephemeral: true });
+            await interaction.reply({ content: `Envie o anexo no canal do painel <#${pending.panelChannelId}> em 60s; será aplicado ao rascunho.`, ephemeral: true });
+            const f = m => m.author.id === interaction.user.id && m.attachments && m.attachments.size > 0;
+            const mc = panelChannel.createMessageCollector({ filter: f, max: 1, time: 60 * 1000 });
+            mc.on('collect', async m => {
+              const att = m.attachments.first();
+              if (!att) return await interaction.followUp({ content: 'Nenhum anexo encontrado.', ephemeral: true });
+              pending.draft = pending.draft || { title: null, description: null, image: null };
+              pending.draft.image = att.url;
+              client.pendingMessages.set(key, pending);
+              await interaction.followUp({ content: 'Anexo aplicado ao rascunho.', ephemeral: true });
+            });
+            mc.on('end', async collected => { if (!collected || collected.size === 0) try { await interaction.followUp({ content: 'Tempo esgotado. Nenhum anexo recebido.', ephemeral: true }); } catch (e) { } });
+            return;
+          }
+
+          // Confirm -> move draft into containers
+          if (cmd === 'confirm') {
+            if (!pending.draft) return interaction.reply({ content: 'Nenhum rascunho encontrado para confirmar.', ephemeral: true });
+            pending.containers = pending.containers || [];
+            pending.containers.push({ title: pending.draft.title || null, description: pending.draft.description || null, image: pending.draft.image || null, footer: null, fields: [] });
+            delete pending.draft;
+            client.pendingMessages.set(key, pending);
+            // try refresh panel
+            try {
+              if (pending.panelChannelId && pending.panelMessageId) {
+                const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require('discord.js');
+                const ch = await interaction.client.channels.fetch(pending.panelChannelId).catch(()=>null);
+                if (ch && ch.isTextBased()) {
+                  const msg = await ch.messages.fetch(pending.panelMessageId).catch(()=>null);
+                  if (msg) {
+                    const embed = new EmbedBuilder().setTitle('Painel de criação de mensagem').setDescription(pending.containers.length ? pending.containers.map((c,i)=>`#${i+1} — ${c.title||'[sem título]'}`).join('\n\n') : 'Sem containers');
+                    const makeRows = (key, containers=[]) => {
+                      const row1 = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`message_add:${key}`).setLabel('➕ Adicionar').setStyle(ButtonStyle.Primary),
+                        new ButtonBuilder().setCustomId(`message_remove_last:${key}`).setLabel('🗑️ Remover').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`message_clear:${key}`).setLabel('🧹 Limpar').setStyle(ButtonStyle.Secondary)
+                      );
+                      const row2 = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`message_preview:${key}`).setLabel('👁️ Pré-visualizar').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`message_send:${key}`).setLabel('✅ Enviar').setStyle(ButtonStyle.Success),
+                        new ButtonBuilder().setCustomId(`message_cancel:${key}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
+                      );
+                      const rows = [row1, row2];
+                      if (containers && containers.length) {
+                        const opts = containers.slice(0,25).map((c,i)=>({ label: `#${i+1} ${c.title||'[sem título]'}`, value: String(i) }));
+                        rows.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`message_select_edit:${key}`).setPlaceholder('Editar container...').addOptions(opts).setMinValues(1).setMaxValues(1)));
+                      }
+                      return rows;
+                    };
+                    await msg.edit({ embeds: [embed], components: makeRows(key, pending.containers) }).catch(()=>{});
+                  }
+                }
+              }
+            } catch (err) { console.error('Erro ao atualizar painel após confirmar rascunho:', err); }
+            return interaction.reply({ content: 'Rascunho confirmado e adicionado ao painel.', ephemeral: true });
+          }
+
+          // Cancel -> discard draft
+          if (cmd === 'cancel') {
+            delete pending.draft;
+            client.pendingMessages.set(parts[1], pending);
+            return interaction.reply({ content: 'Rascunho cancelado.', ephemeral: true });
+          }
+        } catch (err) {
+          console.error('Erro ao processar message_draft button:', err);
+          if (!interaction.replied) await interaction.reply({ content: 'Erro no fluxo de rascunho.', ephemeral: true });
+        }
+      }
+
       // If this is a message panel button, the collector on the panel message
       // will handle it. Skip global handling to avoid double responses which
       // cause "This interaction failed" (two handlers calling showModal/update).
@@ -251,6 +346,24 @@ module.exports = {
     // Modal submit (for message containers)
     if (interaction.isModalSubmit()) {
       const id = interaction.customId;
+      // Draft modal submit: saves into pending.draft instead of pushing to containers
+      if (id && id.startsWith('message_modal_draft:')) {
+        const key = id.split(':')[1];
+        const pending = client.pendingMessages && client.pendingMessages.get(key);
+        if (!pending) return interaction.reply({ content: 'Sessão expirada ou inválida.', ephemeral: true });
+        if (interaction.user.id !== pending.authorId) return interaction.reply({ content: 'Apenas quem iniciou pode submeter este modal.', ephemeral: true });
+
+        const title = interaction.fields.getTextInputValue('c_title') || null;
+        const description = interaction.fields.getTextInputValue('c_description') || null;
+        const image = interaction.fields.getTextInputValue('c_image') || null;
+        pending.draft = pending.draft || {};
+        pending.draft.title = title;
+        pending.draft.description = description;
+        if (image) pending.draft.image = image;
+        client.pendingMessages.set(key, pending);
+        return interaction.reply({ content: 'Rascunho atualizado (preenchido). Use Confirmar para adicionar ao painel.', ephemeral: true });
+      }
+
       if (id && id.startsWith('message_modal:')) {
         const key = id.split(':')[1];
         const pending = client.pendingMessages && client.pendingMessages.get(key);

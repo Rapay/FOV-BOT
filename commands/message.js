@@ -34,7 +34,6 @@ module.exports = {
       const makeRows = (key, containers = []) => {
         const row1 = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`message_add:${key}`).setLabel('➕ Adicionar').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId(`message_upload:${key}`).setLabel('📎 Upload imagem').setStyle(ButtonStyle.Primary),
           new ButtonBuilder().setCustomId(`message_remove_last:${key}`).setLabel('🗑️ Remover').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId(`message_clear:${key}`).setLabel('🧹 Limpar').setStyle(ButtonStyle.Secondary)
         );
@@ -78,15 +77,20 @@ module.exports = {
 
         // ADD -> show modal (global events should handle modal submit)
         if (action === 'message_add') {
-          interaction.client.messageLocks.add(id);
-          const modal = new ModalBuilder().setCustomId(`message_modal:${id}`).setTitle('Adicionar container');
-          modal.addComponents(
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_title').setLabel('Título').setStyle(TextInputStyle.Short).setRequired(false)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_description').setLabel('Descrição').setStyle(TextInputStyle.Paragraph).setRequired(false)),
-            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_image').setLabel('URL da imagem (opcional)').setStyle(TextInputStyle.Short).setRequired(false))
+          // Start a draft flow: create a draft object on the session and present ephemeral
+          // controls to fill fields (modal), upload an image (by sending attachment in panel channel),
+          // confirm to add, or cancel.
+          session.draft = { title: null, description: null, image: null, createdAt: Date.now() };
+          interaction.client.pendingMessages.set(id, session);
+
+          const rowDraft1 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`message_draft_fill:${id}`).setLabel('✏️ Preencher').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(`message_draft_upload:${id}`).setLabel('📎 Upload imagem').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(`message_draft_confirm:${id}`).setLabel('✅ Confirmar').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(`message_draft_cancel:${id}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
           );
-          setTimeout(() => { if (interaction.client.messageLocks.has(id)) interaction.client.messageLocks.delete(id); }, 2 * 60 * 1000);
-          return i.showModal(modal);
+
+          return i.reply({ content: 'Fluxo de adicionar iniciado. Use Preencher para abrir o formulário, Upload para anexar imagem (envie no canal do painel), Confirmar para adicionar ao painel ou Cancelar para abortar.', components: [rowDraft1], ephemeral: true });
         }
 
         // select edit -> open modal for that index
