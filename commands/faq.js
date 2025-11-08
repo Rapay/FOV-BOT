@@ -100,40 +100,48 @@ module.exports = {
 
       if (db.faqs.length === 0) return interaction.reply({ content: 'Nenhuma FAQ cadastrada para publicar.', ephemeral: true });
 
-      // Publicar de forma interativa com paginação: cada página contém até 5 perguntas
-      const chunkSize = 5; // max 5 question buttons per action row
-      const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+      // Publish a single interactive message containing a Select Menu for page 0
+      // and Prev/Next buttons to navigate pages (updates the same message).
+      const chunkSize = 25; // max options per select menu
+      const { ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require('discord.js');
       const totalPages = Math.ceil(db.faqs.length / chunkSize);
 
-      for (let page = 0; page < totalPages; page++) {
+      const makePageComponents = (page) => {
         const offset = page * chunkSize;
         const slice = db.faqs.slice(offset, offset + chunkSize);
         const embed = new EmbedBuilder().setTitle('FAQs').setTimestamp();
-        for (let j = 0; j < slice.length; j++) {
+        embed.setDescription('Clique no item do menu abaixo para ver a resposta.');
+
+        const options = slice.map((item, j) => {
           const idx = offset + j;
-          const q = slice[j].q;
-          const name = `#${idx} — ${q.length > 250 ? q.slice(0,250) + '...' : q}`;
-          embed.addFields({ name, value: 'Clique no botão correspondente para ver a resposta.' });
+          const label = `#${idx} — ${item.q.length > 60 ? item.q.slice(0,57) + '...' : item.q}`;
+          const description = item.q.length > 100 ? item.q.slice(0,100) + '...' : undefined;
+          return { label, value: String(idx), description };
+        });
+
+        const select = new StringSelectMenuBuilder()
+          .setCustomId(`faq_select:${page}`)
+          .setPlaceholder('Selecione a pergunta...')
+          .addOptions(options)
+          .setMinValues(1)
+          .setMaxValues(1);
+
+        const rows = [new ActionRowBuilder().addComponents(select)];
+
+        if (totalPages > 1) {
+          const rowNav = new ActionRowBuilder();
+          const prev = new ButtonBuilder().setCustomId(`faq_page:${page-1}`).setLabel('◀️ Anterior').setStyle(ButtonStyle.Secondary).setDisabled(page <= 0);
+          const pageBadge = new ButtonBuilder().setCustomId(`faq_page_badge:${page}`).setLabel(`${page+1}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true);
+          const next = new ButtonBuilder().setCustomId(`faq_page:${page+1}`).setLabel('Próximo ▶️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages-1);
+          rowNav.addComponents(prev, pageBadge, next);
+          rows.push(rowNav);
         }
 
-        // Row with question buttons (<=5)
-        const rowQuestions = new ActionRowBuilder();
-        for (let j = 0; j < slice.length; j++) {
-          const idx = offset + j;
-          const label = `#${idx}`;
-          rowQuestions.addComponents(new ButtonBuilder().setCustomId(`faq_show:${idx}`).setLabel(label).setStyle(ButtonStyle.Primary));
-        }
+        return { embed, components: rows };
+      };
 
-        // Row with pagination controls: Prev, Page X/Y (disabled), Next
-        const rowNav = new ActionRowBuilder();
-        const prev = new ButtonBuilder().setCustomId(`faq_page:${page-1}`).setLabel('◀️ Anterior').setStyle(ButtonStyle.Secondary).setDisabled(page <= 0);
-        const pageBadge = new ButtonBuilder().setCustomId(`faq_page_badge:${page}`).setLabel(`${page+1}/${totalPages}`).setStyle(ButtonStyle.Secondary).setDisabled(true);
-        const next = new ButtonBuilder().setCustomId(`faq_page:${page+1}`).setLabel('Próximo ▶️').setStyle(ButtonStyle.Secondary).setDisabled(page >= totalPages-1);
-        rowNav.addComponents(prev, pageBadge, next);
-
-        await channel.send({ embeds: [embed], components: [rowQuestions, rowNav] }).catch(()=>{});
-      }
-
+      const { embed, components } = makePageComponents(0);
+      await channel.send({ embeds: [embed], components }).catch(()=>{});
       await interaction.reply({ content: `FAQs publicadas interativamente em ${channel}`, ephemeral: true });
 
     } else if (sub === 'set') {
