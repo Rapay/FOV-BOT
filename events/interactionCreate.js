@@ -132,8 +132,8 @@ module.exports = {
       if (id && id.startsWith('message_button_webhook:')) {
         try {
           const parts = id.split(':');
-          // customId format: message_button_webhook:<sessionId>:<containerIdx>:<buttonIdx>
-          const sessionKey = `${parts[1]}:${parts[2]}:${parts[3]}`;
+          // customId format: message_button_webhook:<sessionId>:<buttonIdx>
+          const sessionKey = `${parts[1]}:${parts[2]}`;
           const hooks = client.messageButtonHooks;
           if (!hooks || !hooks.has(sessionKey)) return interaction.reply({ content: 'Ação não configurada ou expirada.', ephemeral: true });
           const webhookUrl = hooks.get(sessionKey);

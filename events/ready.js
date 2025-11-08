@@ -44,5 +44,27 @@ module.exports = {
         try { fs.unlinkSync(p); } catch (e) { /* ignore */ }
       }
     } catch (e) { console.error('Erro verificando marker de restart:', e); }
+
+    // Load persisted message button webhook mappings so buttons survive restarts
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const db = path.join(__dirname, '..', 'data', 'message_buttons.json');
+      client.messageButtonHooks = new Map();
+      if (fs.existsSync(db)) {
+        try {
+          const raw = fs.readFileSync(db, 'utf8') || '{}';
+          const obj = JSON.parse(raw);
+          for (const k of Object.keys(obj)) {
+            client.messageButtonHooks.set(k, obj[k]);
+          }
+          console.log(`Loaded ${Object.keys(obj).length} persisted message button hooks.`);
+        } catch (e) {
+          console.error('Erro ao carregar message_buttons.json:', e);
+        }
+      }
+    } catch (e) {
+      console.error('Erro ao inicializar messageButtonHooks:', e);
+    }
   }
 };

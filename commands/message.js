@@ -1,5 +1,21 @@
 ﻿const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, PermissionFlagsBits, StringSelectMenuBuilder } = require('discord.js');
 const fs = require('fs');
+const path = require('path');
+
+// message buttons persistence file
+const _buttonsDbPath = path.join(__dirname, '..', 'data', 'message_buttons.json');
+function _saveButtonHook(key, url) {
+  try {
+    let data = {};
+    if (fs.existsSync(_buttonsDbPath)) {
+      try { data = JSON.parse(fs.readFileSync(_buttonsDbPath, 'utf8') || '{}'); } catch (e) { data = {}; }
+    }
+    data[key] = url;
+    fs.writeFileSync(_buttonsDbPath, JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) {
+    console.error('Erro salvando message button hook:', e);
+  }
+}
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -24,21 +40,14 @@ module.exports = {
       }
 
   const id = `${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-  const session = { id, authorId: interaction.user.id, channelId: channel.id, panelChannelId: null, containers: [] };
+  const session = { id, authorId: interaction.user.id, channelId: channel.id, panelChannelId: null, container: null };
 
-      const makeRows = (key, containers = []) => {
+      const makeRows = (key) => {
         const rows = [];
-        if (containers && containers.length) {
-          const opts = containers.slice(0, 25).map((c, i) => ({
-            label: `#${i+1} ${c.title || '[sem título]'}`,
-            value: String(i),
-            description: c.description ? (c.description.length > 80 ? c.description.slice(0, 77) + '...' : c.description) : undefined
-          }));
-          rows.push(new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`message_select_edit:${key}`).setPlaceholder('Editar container...').addOptions(opts).setMinValues(1).setMaxValues(1)));
-        }
         const row1 = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`message_add:${key}`).setLabel('➕ Adicionar').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId(`message_remove_last:${key}`).setLabel('🗑️ Remover').setStyle(ButtonStyle.Secondary)
+          new ButtonBuilder().setCustomId(`message_edit:${key}`).setLabel('✏️ Editar').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`message_remove:${key}`).setLabel('🗑️ Remover').setStyle(ButtonStyle.Secondary)
         );
         const row2 = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`message_preview:${key}`).setLabel('👁️ Pré-visualizar').setStyle(ButtonStyle.Secondary),
@@ -55,9 +64,8 @@ module.exports = {
 
       const refreshPanel = async () => {
         const embed = new EmbedBuilder();
-        if (!session.containers.length) embed.setTitle('Sem containers');
-        else embed.setTitle('Containers:').setDescription(session.containers.map((c, i) => `#${i+1} — ${c.title || '[sem título]'}`).join('\n'));
-        // note: no persistent pre-upload image feature anymore
+        if (!session.container) embed.setTitle('Sem container').setDescription('Clique em ➕ Adicionar para criar um novo container.');
+        else embed.setTitle(session.container.title || 'Container criado').setDescription(session.container.description || '[sem descrição]');
         try { await panel.edit({ embeds: [embed], components: makeRows(id) }); } catch (e) { }
       };
 
@@ -74,17 +82,15 @@ module.exports = {
           // advanced edit handlers that include an index argument (arg)
           const parseIdx = () => { const n = Number(arg); return Number.isNaN(n) ? null : n; };
 
-          // Handle edit-advanced actions
-          if (action === 'message_edit_set_author' || action === 'message_edit_set_titleurl' || action === 'message_edit_add_field' || action === 'message_edit_toggle_timestamp' || action === 'message_edit_upload_authoricon' || action === 'message_edit_upload_thumbnail' || action === 'message_edit_upload_footericon') {
-            const idx = parseIdx();
-            if (idx === null) return i.reply({ content: 'Índice inválido.', ephemeral: true });
-            const existing = session.containers[idx];
-            if (!existing) return i.reply({ content: 'Container não encontrado.', ephemeral: true });
+          // Handle edit-advanced actions (single container)
+          if (action === 'message_edit_set_author' || action === 'message_edit_set_titleurl' || action === 'message_edit_add_field' || action === 'message_edit_toggle_timestamp' || action === 'message_edit_upload_authoricon' || action === 'message_edit_upload_thumbnail' || action === 'message_edit_upload_footericon' || action === 'message_edit_toggle_titlelarge' || action === 'message_edit_add_button_url' || action === 'message_edit_add_button_webhook') {
+            const existing = session.container;
+            if (!existing) return i.reply({ content: 'Nenhum container criado ainda. Use Adicionar primeiro.', ephemeral: true });
 
             try {
               // set author name
               if (action === 'message_edit_set_author') {
-                const modal = new ModalBuilder().setCustomId(`message_modal_set_author:${id}:${idx}`).setTitle('Definir autor');
+                const modal = new ModalBuilder().setCustomId(`message_modal_set_author:${id}`).setTitle('Definir autor');
                 modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('author_name').setLabel('Nome do autor').setStyle(TextInputStyle.Short).setRequired(false)));
                 await i.showModal(modal);
                 const submitted = await i.awaitModalSubmit({ time: 2 * 60 * 1000, filter: m => m.user.id === interaction.user.id });
@@ -97,7 +103,7 @@ module.exports = {
 
               // set title URL
               if (action === 'message_edit_set_titleurl') {
-                const modal = new ModalBuilder().setCustomId(`message_modal_set_titleurl:${id}:${idx}`).setTitle('Definir Title URL');
+                const modal = new ModalBuilder().setCustomId(`message_modal_set_titleurl:${id}`).setTitle('Definir Title URL');
                 modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('title_url').setLabel('URL do título (ex: https://...)').setStyle(TextInputStyle.Short).setRequired(false)));
                 await i.showModal(modal);
                 const submitted = await i.awaitModalSubmit({ time: 2 * 60 * 1000, filter: m => m.user.id === interaction.user.id });
@@ -110,7 +116,7 @@ module.exports = {
 
               // add a field (name + value)
               if (action === 'message_edit_add_field') {
-                const modal = new ModalBuilder().setCustomId(`message_modal_add_field:${id}:${idx}`).setTitle('Adicionar field (até 3)');
+                const modal = new ModalBuilder().setCustomId(`message_modal_add_field:${id}`).setTitle('Adicionar field (até 3)');
                 modal.addComponents(
                   new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('f_name').setLabel('Nome do field').setStyle(TextInputStyle.Short).setRequired(true)),
                   new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('f_value').setLabel('Valor do field').setStyle(TextInputStyle.Paragraph).setRequired(true))
@@ -147,7 +153,7 @@ module.exports = {
                   await dmChannel.send({ content: 'Envie a imagem para este DM; ela será aplicada ao embed.' }).catch(()=>{});
                   const recent = await dmChannel.messages.fetch({ limit: 10 }).catch(() => null);
                   const found = recent && recent.find(m => m.author.id === user.id && m.attachments && m.attachments.size > 0);
-                  if (found) {
+                    if (found) {
                     const url = found.attachments.first().url;
                     if (action === 'message_edit_upload_authoricon') existing.authorIcon = url;
                     if (action === 'message_edit_upload_thumbnail') existing.thumbnail = url;
@@ -183,12 +189,10 @@ module.exports = {
 
           // toggle title-large (use the title as a big header in the description)
           if (action === 'message_edit_toggle_titlelarge') {
-            const idx = parseIdx();
-            if (idx === null) return i.reply({ content: 'Índice inválido.', ephemeral: true });
-            const existing = session.containers[idx];
-            if (!existing) return i.reply({ content: 'Container não encontrado.', ephemeral: true });
+            const existing = session.container;
+            if (!existing) return i.reply({ content: 'Nenhum container criado ainda.', ephemeral: true });
             existing.titleLarge = !existing.titleLarge;
-            await i.reply({ content: `Título grande ${existing.titleLarge ? 'ativado' : 'desativado'} para o container #${idx+1}.`, ephemeral: true }).catch(()=>{});
+            await i.reply({ content: `Título grande ${existing.titleLarge ? 'ativado' : 'desativado'}.`, ephemeral: true }).catch(()=>{});
             await refreshPanel();
             return;
           }
@@ -228,7 +232,7 @@ module.exports = {
                   const confirmRow = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId(`message_dm_confirm:${id}`).setLabel('📎 Concluir upload').setStyle(ButtonStyle.Primary)
                   );
-                  const dmPrompt = await dmChannel.send({ content: 'Envie a imagem para este DM nas próximas 60s; quando terminar, clique em "Concluir upload" abaixo.', components: [confirmRow] }).catch(()=>null);
+                  const dmPrompt = await dmChannel.send({ content: 'Clique em "Concluir upload" quando terminar de enviar a imagem neste DM.', components: [confirmRow] }).catch(()=>null);
 
                   const fdm = m => m.author.id === user.id && m.attachments && m.attachments.size > 0;
                   const mcDM = dmChannel.createMessageCollector({ filter: fdm, max: 1, time: 60 * 1000 });
@@ -240,9 +244,34 @@ module.exports = {
                   }
 
                   const applyAttachment = async (attUrl) => {
-                    session.containers.push({ title, description, color: color || null, image: attUrl || null, imageText });
+                    session.container = { title, description, color: color || null, image: attUrl || null, imageText };
                     try { await dmChannel.send({ content: attUrl ? 'Imagem recebida e aplicada ao container.' : 'Nenhuma imagem encontrada: container adicionado sem imagem.' }).catch(()=>{}); } catch {}
                     try { await refreshPanel(); } catch {}
+                    // after adding the container, offer advanced options (including adding buttons)
+                    try {
+                      const idx = 0;
+                      const advRow1 = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`message_edit_set_author:${id}`).setLabel('✍️ Autor').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`message_edit_upload_authoricon:${id}`).setLabel('📤 Autor Icon (DM)').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`message_edit_set_titleurl:${id}`).setLabel('🔗 Title URL').setStyle(ButtonStyle.Secondary)
+                      );
+                      const advRow2 = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`message_edit_upload_thumbnail:${id}`).setLabel('📤 Thumbnail (DM)').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`message_edit_upload_footericon:${id}`).setLabel('📤 Footer Icon (DM)').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`message_edit_toggle_timestamp:${id}`).setLabel('⏱️ Toggle Timestamp').setStyle(ButtonStyle.Secondary)
+                      );
+                      const advRowTitle = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`message_edit_toggle_titlelarge:${id}`).setLabel('⬆️ Título grande').setStyle(ButtonStyle.Secondary)
+                      );
+                      const advRowButtons = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`message_edit_add_button_url:${id}`).setLabel('➕ Botão (URL)').setStyle(ButtonStyle.Secondary),
+                        new ButtonBuilder().setCustomId(`message_edit_add_button_webhook:${id}`).setLabel('➕ Botão (Webhook)').setStyle(ButtonStyle.Secondary)
+                      );
+                      const advRow3 = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`message_edit_add_field:${id}`).setLabel('➕ Adicionar Field').setStyle(ButtonStyle.Secondary)
+                      );
+                      await submitted.followUp({ content: 'Opções avançadas (opcionais):', components: [advRow1, advRow2, advRowTitle, advRowButtons, advRow3], ephemeral: true }).catch(()=>{});
+                    } catch (err) { console.error('Erro ao enviar opções avançadas após upload:', err); }
                   };
 
                   mcDM.on('collect', async m => {
@@ -316,26 +345,22 @@ module.exports = {
             return;
           }
 
-          // REMOVE LAST
-          if (action === 'message_remove_last') {
-            session.containers = session.containers || [];
-            const removed = session.containers.pop();
-            await i.update({ content: removed ? 'Último container removido.' : 'Nenhum container para remover.', ephemeral: true, components: makeRows(id) }).catch(()=>{});
+          // REMOVE (single container)
+          if (action === 'message_remove') {
+            if (!session.container) return i.update({ content: 'Nenhum container para remover.', ephemeral: true, components: makeRows(id) }).catch(()=>{});
+            session.container = null;
+            await i.update({ content: 'Container removido.', ephemeral: true, components: makeRows(id) }).catch(()=>{});
             await refreshPanel();
             return;
           }
 
           // UPLOAD (DM) pre-upload removed (feature deprecated)
 
-          // EDIT SELECT
-          if (action === 'message_select_edit') {
-            const val = i.values && i.values[0];
-            if (typeof val === 'undefined') return i.reply({ content: 'Seleção inválida.', ephemeral: true });
-            const idx = Number(val);
-            if (Number.isNaN(idx)) return i.reply({ content: 'Seleção inválida.', ephemeral: true });
-            const existing = session.containers[idx] || {};
+          // EDIT (single container)
+          if (action === 'message_edit') {
+            const existing = session.container || {};
             try {
-              const modal = new ModalBuilder().setCustomId(`message_edit_local:${id}:${idx}`).setTitle(`Editar container #${idx+1}`);
+              const modal = new ModalBuilder().setCustomId(`message_edit_local:${id}`).setTitle(`Editar container`);
               modal.addComponents(
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_title').setLabel('Título').setStyle(TextInputStyle.Short).setRequired(false).setPlaceholder(existing.title || '')),
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('c_description').setLabel('Descrição').setStyle(TextInputStyle.Paragraph).setRequired(false).setPlaceholder(existing.description || '')),
@@ -347,32 +372,32 @@ module.exports = {
               const description = submitted.fields.getTextInputValue('c_description') || existing.description || null;
               const sessionColor = submitted.fields.getTextInputValue('c_color') || existing.color || null;
               const imageText = submitted.fields.getTextInputValue('c_image_text') || existing.imageText || null;
-              session.containers[idx] = { title, description, color: sessionColor || null, image: existing.image || null, imageText };
-                await submitted.reply({ content: `Container #${idx+1} atualizado.`, ephemeral: true });
+              session.container = { title, description, color: sessionColor || null, image: existing.image || null, imageText };
+                await submitted.reply({ content: `Container atualizado.`, ephemeral: true });
               await refreshPanel();
 
-              // Offer advanced edit options via ephemeral buttons (author, icons (DM-only), title URL, timestamp, fields)
+              // Offer advanced edit options via ephemeral buttons (author, icons (DM-only), title URL, timestamp, fields, buttons)
               try {
                 const advRow1 = new ActionRowBuilder().addComponents(
-                  new ButtonBuilder().setCustomId(`message_edit_set_author:${id}:${idx}`).setLabel('✍️ Autor').setStyle(ButtonStyle.Secondary),
-                  new ButtonBuilder().setCustomId(`message_edit_upload_authoricon:${id}:${idx}`).setLabel('📤 Autor Icon (DM)').setStyle(ButtonStyle.Secondary),
-                  new ButtonBuilder().setCustomId(`message_edit_set_titleurl:${id}:${idx}`).setLabel('🔗 Title URL').setStyle(ButtonStyle.Secondary)
+                  new ButtonBuilder().setCustomId(`message_edit_set_author:${id}`).setLabel('✍️ Autor').setStyle(ButtonStyle.Secondary),
+                  new ButtonBuilder().setCustomId(`message_edit_upload_authoricon:${id}`).setLabel('📤 Autor Icon (DM)').setStyle(ButtonStyle.Secondary),
+                  new ButtonBuilder().setCustomId(`message_edit_set_titleurl:${id}`).setLabel('🔗 Title URL').setStyle(ButtonStyle.Secondary)
                 );
                 const advRow2 = new ActionRowBuilder().addComponents(
-                  new ButtonBuilder().setCustomId(`message_edit_upload_thumbnail:${id}:${idx}`).setLabel('📤 Thumbnail (DM)').setStyle(ButtonStyle.Secondary),
-                  new ButtonBuilder().setCustomId(`message_edit_upload_footericon:${id}:${idx}`).setLabel('📤 Footer Icon (DM)').setStyle(ButtonStyle.Secondary),
-                  new ButtonBuilder().setCustomId(`message_edit_toggle_timestamp:${id}:${idx}`).setLabel('⏱️ Toggle Timestamp').setStyle(ButtonStyle.Secondary)
+                  new ButtonBuilder().setCustomId(`message_edit_upload_thumbnail:${id}`).setLabel('📤 Thumbnail (DM)').setStyle(ButtonStyle.Secondary),
+                  new ButtonBuilder().setCustomId(`message_edit_upload_footericon:${id}`).setLabel('📤 Footer Icon (DM)').setStyle(ButtonStyle.Secondary),
+                  new ButtonBuilder().setCustomId(`message_edit_toggle_timestamp:${id}`).setLabel('⏱️ Toggle Timestamp').setStyle(ButtonStyle.Secondary)
                 );
                 // add title-large toggle to allow using the title as a big header in the description
                 const advRowTitle = new ActionRowBuilder().addComponents(
-                  new ButtonBuilder().setCustomId(`message_edit_toggle_titlelarge:${id}:${idx}`).setLabel('⬆️ Título grande').setStyle(ButtonStyle.Secondary)
+                  new ButtonBuilder().setCustomId(`message_edit_toggle_titlelarge:${id}`).setLabel('⬆️ Título grande').setStyle(ButtonStyle.Secondary)
                 );
                 const advRow3 = new ActionRowBuilder().addComponents(
-                  new ButtonBuilder().setCustomId(`message_edit_add_field:${id}:${idx}`).setLabel('➕ Adicionar Field').setStyle(ButtonStyle.Secondary)
+                  new ButtonBuilder().setCustomId(`message_edit_add_field:${id}`).setLabel('➕ Adicionar Field').setStyle(ButtonStyle.Secondary)
                 );
                 const advRowButtons = new ActionRowBuilder().addComponents(
-                  new ButtonBuilder().setCustomId(`message_edit_add_button_url:${id}:${idx}`).setLabel('➕ Botão (URL)').setStyle(ButtonStyle.Secondary),
-                  new ButtonBuilder().setCustomId(`message_edit_add_button_webhook:${id}:${idx}`).setLabel('➕ Botão (Webhook)').setStyle(ButtonStyle.Secondary)
+                  new ButtonBuilder().setCustomId(`message_edit_add_button_url:${id}`).setLabel('➕ Botão (URL)').setStyle(ButtonStyle.Secondary),
+                  new ButtonBuilder().setCustomId(`message_edit_add_button_webhook:${id}`).setLabel('➕ Botão (Webhook)').setStyle(ButtonStyle.Secondary)
                 );
                 await submitted.followUp({ content: 'Opções avançadas (opcionais):', components: [advRow1, advRow2, advRowTitle, advRowButtons, advRow3], ephemeral: true }).catch(()=>{});
               } catch (err) {
@@ -387,12 +412,10 @@ module.exports = {
 
           // Add button (URL)
           if (action === 'message_edit_add_button_url') {
-            const idx = parseIdx();
-            if (idx === null) return i.reply({ content: 'Índice inválido.', ephemeral: true });
-            const existing = session.containers[idx];
-            if (!existing) return i.reply({ content: 'Container não encontrado.', ephemeral: true });
+            const existing = session.container;
+            if (!existing) return i.reply({ content: 'Nenhum container criado ainda.', ephemeral: true });
             try {
-              const modal = new ModalBuilder().setCustomId(`message_modal_add_button_url:${id}:${idx}`).setTitle('Adicionar Botão (URL)');
+              const modal = new ModalBuilder().setCustomId(`message_modal_add_button_url:${id}`).setTitle('Adicionar Botão (URL)');
               modal.addComponents(
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_label').setLabel('Rótulo do botão').setStyle(TextInputStyle.Short).setRequired(true)),
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_url').setLabel('URL (https://...)').setStyle(TextInputStyle.Short).setRequired(true))
@@ -414,12 +437,10 @@ module.exports = {
 
           // Add button (Webhook)
           if (action === 'message_edit_add_button_webhook') {
-            const idx = parseIdx();
-            if (idx === null) return i.reply({ content: 'Índice inválido.', ephemeral: true });
-            const existing = session.containers[idx];
-            if (!existing) return i.reply({ content: 'Container não encontrado.', ephemeral: true });
+            const existing = session.container;
+            if (!existing) return i.reply({ content: 'Nenhum container criado ainda.', ephemeral: true });
             try {
-              const modal = new ModalBuilder().setCustomId(`message_modal_add_button_webhook:${id}:${idx}`).setTitle('Adicionar Botão (Webhook)');
+              const modal = new ModalBuilder().setCustomId(`message_modal_add_button_webhook:${id}`).setTitle('Adicionar Botão (Webhook)');
               modal.addComponents(
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_label').setLabel('Rótulo do botão').setStyle(TextInputStyle.Short).setRequired(true)),
                 new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_webhook').setLabel('URL do webhook (https://...)').setStyle(TextInputStyle.Short).setRequired(true))
@@ -441,64 +462,61 @@ module.exports = {
 
           // PREVIEW
           if (action === 'message_preview') {
-            if (!session.containers.length) return i.update({ content: 'Nenhum container para pré-visualizar.', ephemeral: true, components: makeRows(id) }).catch(() => {});
+            if (!session.container) return i.update({ content: 'Nenhum container para pré-visualizar.', ephemeral: true, components: makeRows(id) }).catch(() => {});
             try {
               const ch = await interaction.client.channels.fetch(session.channelId);
               if (!ch || !ch.isTextBased()) throw new Error('Canal inválido');
-              // send each container as a separate message so buttons (components) can be attached per container
-              for (let ci = 0; ci < session.containers.length; ci++) {
-                const c = session.containers[ci];
-                const e = new EmbedBuilder();
-                if (c.authorName) e.setAuthor({ name: c.authorName, iconURL: c.authorIcon || undefined });
-                if (c.title) {
-                  if (c.titleLarge) {
-                    const descParts = [];
-                    descParts.push(`**${c.title}**`);
-                    if (c.description) descParts.push('\n' + c.description);
-                    e.setDescription(descParts.join('\n\n'));
-                  } else {
-                    e.setTitle(c.title);
-                    if (c.description) e.setDescription(c.description);
-                  }
-                } else if (c.description) {
-                  e.setDescription(c.description);
+              const c = session.container;
+              const e = new EmbedBuilder();
+              if (c.authorName) e.setAuthor({ name: c.authorName, iconURL: c.authorIcon || undefined });
+              if (c.title) {
+                if (c.titleLarge) {
+                  const descParts = [];
+                  descParts.push(`**${c.title}**`);
+                  if (c.description) descParts.push('\n' + c.description);
+                  e.setDescription(descParts.join('\n\n'));
+                } else {
+                  e.setTitle(c.title);
+                  if (c.description) e.setDescription(c.description);
                 }
-                if (c.titleUrl && !c.titleLarge) e.setURL(c.titleUrl);
-                if (c.thumbnail) e.setThumbnail(c.thumbnail);
-                if (c.image) e.setImage(c.image);
-                if (c.imageText || c.footerIcon) e.setFooter({ text: c.imageText || '', iconURL: c.footerIcon || undefined });
-                if (c.timestamp) e.setTimestamp();
-                if (c.fields && Array.isArray(c.fields)) c.fields.slice(0,3).forEach(f => e.addFields({ name: f.name, value: f.value, inline: !!f.inline }));
-
-                // build components from buttons if present
-                const components = [];
-                if (c.buttons && Array.isArray(c.buttons) && c.buttons.length) {
-                  const row = new ActionRowBuilder();
-                  for (let bi = 0; bi < c.buttons.length && bi < 5; bi++) {
-                    const b = c.buttons[bi];
-                    const btn = new ButtonBuilder().setLabel(b.label || 'Abrir');
-                    if (b.type === 'url') {
-                      btn.setStyle(ButtonStyle.Link).setURL(b.url);
-                    } else if (b.type === 'webhook') {
-                      // use a stable customId that references session id + container idx + button idx
-                      const cid = `message_button_webhook:${session.id}:${ci}:${bi}`;
-                      btn.setStyle(ButtonStyle.Primary).setCustomId(cid);
-                      // store mapping on the client so interaction handler can find webhook URL
-                      try {
-                        if (!interaction.client.messageButtonHooks) interaction.client.messageButtonHooks = new Map();
-                        interaction.client.messageButtonHooks.set(`${session.id}:${ci}:${bi}`, b.webhookUrl);
-                      } catch (e) { console.error('Erro ao registrar webhook mapping:', e); }
-                    } else {
-                      btn.setStyle(ButtonStyle.Secondary).setCustomId(`message_button:${session.id}:${ci}:${bi}`);
-                    }
-                    row.addComponents(btn);
-                  }
-                  components.push(row);
-                }
-
-                await ch.send({ content: `Pré-visualização (por ${interaction.user.tag}):`, embeds: [e], components }).catch(() => {});
+              } else if (c.description) {
+                e.setDescription(c.description);
               }
-              await i.update({ content: 'Pré-visualização(s) enviadas no canal padrão.', components: makeRows(id) }).catch(() => {});
+              if (c.titleUrl && !c.titleLarge) e.setURL(c.titleUrl);
+              if (c.thumbnail) e.setThumbnail(c.thumbnail);
+              if (c.image) e.setImage(c.image);
+              if (c.imageText || c.footerIcon) e.setFooter({ text: c.imageText || '', iconURL: c.footerIcon || undefined });
+              if (c.timestamp) e.setTimestamp();
+              if (c.fields && Array.isArray(c.fields)) c.fields.slice(0,3).forEach(f => e.addFields({ name: f.name, value: f.value, inline: !!f.inline }));
+
+              // build components from buttons if present
+              const components = [];
+              if (c.buttons && Array.isArray(c.buttons) && c.buttons.length) {
+                const row = new ActionRowBuilder();
+                for (let bi = 0; bi < c.buttons.length && bi < 5; bi++) {
+                  const b = c.buttons[bi];
+                  const btn = new ButtonBuilder().setLabel(b.label || 'Abrir');
+                  if (b.type === 'url') {
+                    btn.setStyle(ButtonStyle.Link).setURL(b.url);
+                  } else if (b.type === 'webhook') {
+                    const cid = `message_button_webhook:${session.id}:${bi}`;
+                    btn.setStyle(ButtonStyle.Primary).setCustomId(cid);
+                    try {
+                      if (!interaction.client.messageButtonHooks) interaction.client.messageButtonHooks = new Map();
+                      const key = `${session.id}:${bi}`;
+                      interaction.client.messageButtonHooks.set(key, b.webhookUrl);
+                      // preview-only: do not persist preview mappings to disk
+                    } catch (e) { console.error('Erro ao registrar webhook mapping:', e); }
+                  } else {
+                    btn.setStyle(ButtonStyle.Secondary).setCustomId(`message_button:${session.id}:${bi}`);
+                  }
+                  row.addComponents(btn);
+                }
+                components.push(row);
+              }
+
+              await ch.send({ content: `Pré-visualização (por ${interaction.user.tag}):`, embeds: [e], components }).catch(() => {});
+              await i.update({ content: 'Pré-visualização enviada no canal padrão.', components: makeRows(id) }).catch(() => {});
             } catch (err) {
               console.error('preview error', err);
               await i.update({ content: 'Falha ao enviar pré-visualização.', components: makeRows(id) }).catch(() => {});
@@ -508,53 +526,78 @@ module.exports = {
 
           // SEND
           if (action === 'message_send') {
-            if (!session.containers.length) return i.update({ content: 'Nenhum container para enviar.', ephemeral: true, components: makeRows(id) }).catch(() => {});
+            if (!session.container) return i.update({ content: 'Nenhum container para enviar.', ephemeral: true, components: makeRows(id) }).catch(() => {});
             try {
               const ch = await interaction.client.channels.fetch(session.channelId);
               if (!ch || !ch.isTextBased()) throw new Error('Canal inválido');
-              for (const c of session.containers) {
-                const e = new EmbedBuilder();
-                if (c.authorName) e.setAuthor({ name: c.authorName, iconURL: c.authorIcon || undefined });
-                if (c.title) {
-                  if (c.titleLarge) {
-                    const descParts = [];
-                    descParts.push(`**${c.title}**`);
-                    if (c.description) descParts.push('\n' + c.description);
-                    e.setDescription(descParts.join('\n\n'));
-                  } else {
-                    e.setTitle(c.title);
-                    if (c.description) e.setDescription(c.description);
-                  }
-                } else if (c.description) {
-                  e.setDescription(c.description);
+              const c = session.container;
+              const e = new EmbedBuilder();
+              if (c.authorName) e.setAuthor({ name: c.authorName, iconURL: c.authorIcon || undefined });
+              if (c.title) {
+                if (c.titleLarge) {
+                  const descParts = [];
+                  descParts.push(`**${c.title}**`);
+                  if (c.description) descParts.push('\n' + c.description);
+                  e.setDescription(descParts.join('\n\n'));
+                } else {
+                  e.setTitle(c.title);
+                  if (c.description) e.setDescription(c.description);
                 }
-                if (c.titleUrl && !c.titleLarge) e.setURL(c.titleUrl);
-                if (c.thumbnail) e.setThumbnail(c.thumbnail);
-                if (c.image) e.setImage(c.image);
-                if (c.imageText || c.footerIcon) e.setFooter({ text: c.imageText || '', iconURL: c.footerIcon || undefined });
-                if (c.timestamp) e.setTimestamp();
-                if (c.fields && Array.isArray(c.fields)) c.fields.slice(0,3).forEach(f => e.addFields({ name: f.name, value: f.value, inline: !!f.inline }));
-                // build components from buttons if present (for sending)
-                const components = [];
-                if (c.buttons && Array.isArray(c.buttons) && c.buttons.length) {
-                  const row = new ActionRowBuilder();
+              } else if (c.description) {
+                e.setDescription(c.description);
+              }
+              if (c.titleUrl && !c.titleLarge) e.setURL(c.titleUrl);
+              if (c.thumbnail) e.setThumbnail(c.thumbnail);
+              if (c.image) e.setImage(c.image);
+              if (c.imageText || c.footerIcon) e.setFooter({ text: c.imageText || '', iconURL: c.footerIcon || undefined });
+              if (c.timestamp) e.setTimestamp();
+              if (c.fields && Array.isArray(c.fields)) c.fields.slice(0,3).forEach(f => e.addFields({ name: f.name, value: f.value, inline: !!f.inline }));
+              // build components from buttons if present (for sending)
+              const components = [];
+              if (c.buttons && Array.isArray(c.buttons) && c.buttons.length) {
+                const row = new ActionRowBuilder();
+                for (let bi = 0; bi < c.buttons.length && bi < 5; bi++) {
+                  const b = c.buttons[bi];
+                  const btn = new ButtonBuilder().setLabel(b.label || 'Abrir');
+                  if (b.type === 'url') btn.setStyle(ButtonStyle.Link).setURL(b.url);
+                  else if (b.type === 'webhook') {
+                    const cid = `message_button_webhook:${session.id}:${bi}`;
+                    btn.setStyle(ButtonStyle.Primary).setCustomId(cid);
+                    try {
+                      if (!interaction.client.messageButtonHooks) interaction.client.messageButtonHooks = new Map();
+                      const key = `${session.id}:${bi}`;
+                      interaction.client.messageButtonHooks.set(key, b.webhookUrl);
+                      _saveButtonHook(key, b.webhookUrl);
+                    } catch(e) { console.error(e); }
+                  } else btn.setStyle(ButtonStyle.Secondary).setCustomId(`message_button:${session.id}:${bi}`);
+                  row.addComponents(btn);
+                }
+                components.push(row);
+              }
+
+              const sent = await ch.send({ embeds: [e], components }).catch(() => null);
+              // After sending, if there are webhook buttons, update their customIds to reference the sent message id
+              if (sent && c.buttons && Array.isArray(c.buttons) && c.buttons.length) {
+                try {
+                  const newRow = new ActionRowBuilder();
                   for (let bi = 0; bi < c.buttons.length && bi < 5; bi++) {
                     const b = c.buttons[bi];
                     const btn = new ButtonBuilder().setLabel(b.label || 'Abrir');
                     if (b.type === 'url') btn.setStyle(ButtonStyle.Link).setURL(b.url);
                     else if (b.type === 'webhook') {
-                      const cid = `message_button_webhook:${session.id}:${ci}:${bi}`;
-                      btn.setStyle(ButtonStyle.Primary).setCustomId(cid);
-                      try { if (!interaction.client.messageButtonHooks) interaction.client.messageButtonHooks = new Map(); interaction.client.messageButtonHooks.set(`${session.id}:${ci}:${bi}`, b.webhookUrl); } catch(e) { console.error(e); }
-                    } else btn.setStyle(ButtonStyle.Secondary).setCustomId(`message_button:${session.id}:${ci}:${bi}`);
-                    row.addComponents(btn);
+                      const key = `${sent.id}:${bi}`;
+                      btn.setStyle(ButtonStyle.Primary).setCustomId(`message_button_webhook:${sent.id}:${bi}`);
+                      try { if (!interaction.client.messageButtonHooks) interaction.client.messageButtonHooks = new Map(); interaction.client.messageButtonHooks.set(key, b.webhookUrl); _saveButtonHook(key, b.webhookUrl); } catch(e) { console.error(e); }
+                    } else btn.setStyle(ButtonStyle.Secondary).setCustomId(`message_button:${sent.id}:${bi}`);
+                    newRow.addComponents(btn);
                   }
-                  components.push(row);
+                  await sent.edit({ components: [newRow] }).catch(()=>{});
+                } catch (err) {
+                  console.error('Erro ao atualizar customIds de botões após envio:', err);
                 }
-
-                await ch.send({ embeds: [e], components }).catch(() => {});
               }
-              await i.update({ content: 'Mensagem(s) enviadas.', embeds: [], components: [] }).catch(() => {});
+
+              await i.update({ content: 'Mensagem enviada.', embeds: [], components: [] }).catch(() => {});
               collector.stop('sent');
             } catch (err) {
               console.error('send error', err);
