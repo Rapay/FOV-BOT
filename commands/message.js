@@ -47,6 +47,8 @@ module.exports = {
         const row1 = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`message_add:${key}`).setLabel('➕ Adicionar').setStyle(ButtonStyle.Primary),
           new ButtonBuilder().setCustomId(`message_edit:${key}`).setLabel('✏️ Editar').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`message_add_button:${key}`).setLabel('➕ Botão').setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder().setCustomId(`message_manage_buttons:${key}`).setLabel('🧾 Botões').setStyle(ButtonStyle.Secondary),
           new ButtonBuilder().setCustomId(`message_remove:${key}`).setLabel('🗑️ Remover').setStyle(ButtonStyle.Secondary)
         );
         const row2 = new ActionRowBuilder().addComponents(
@@ -55,6 +57,48 @@ module.exports = {
           new ButtonBuilder().setCustomId(`message_cancel:${key}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger)
         );
         rows.push(row1, row2);
+
+        // If a container exists for this session, show the advanced inline panel rows so users can add icons, fields and buttons directly from the panel
+        try {
+          if (session && session.container) {
+            const adv1 = new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId(`message_edit_set_author:${key}`).setLabel('✍️ Autor').setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder().setCustomId(`message_edit_upload_authoricon:${key}`).setLabel('📤 Autor Icon (DM)').setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder().setCustomId(`message_edit_set_titleurl:${key}`).setLabel('🔗 Title URL').setStyle(ButtonStyle.Secondary)
+            );
+            const adv2 = new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId(`message_edit_upload_thumbnail:${key}`).setLabel('📤 Thumbnail (DM)').setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder().setCustomId(`message_edit_upload_footericon:${key}`).setLabel('📤 Footer Icon (DM)').setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder().setCustomId(`message_edit_toggle_timestamp:${key}`).setLabel('⏱️ Timestamp').setStyle(ButtonStyle.Secondary)
+            );
+            const advTitle = new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId(`message_edit_toggle_titlelarge:${key}`).setLabel('⬆️ Título grande').setStyle(ButtonStyle.Secondary)
+            );
+            const advButtons = new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId(`message_edit_add_button_url:${key}`).setLabel('➕ Botão (URL)').setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder().setCustomId(`message_edit_add_button_webhook:${key}`).setLabel('➕ Botão (Webhook)').setStyle(ButtonStyle.Secondary),
+              new ButtonBuilder().setCustomId(`message_manage_buttons:${key}`).setLabel('🧾 Gerenciar').setStyle(ButtonStyle.Secondary)
+            );
+            // inline selects to reduce clicks: choose button type and default style directly from the panel
+            const selType = new StringSelectMenuBuilder().setCustomId(`message_panel_button_type:${key}`).setPlaceholder('Criar botão: escolha o tipo').addOptions([
+              { label: 'URL', value: 'url', description: 'Botão que abre um link' },
+              { label: 'Webhook', value: 'webhook', description: 'Botão que aciona um webhook' }
+            ]).setMinValues(1).setMaxValues(1);
+            const selStyle = new StringSelectMenuBuilder().setCustomId(`message_panel_button_style:${key}`).setPlaceholder('Estilo (aplica-se a webhooks)').addOptions([
+              { label: 'Primary', value: 'primary', description: 'Destaque (azul)' },
+              { label: 'Secondary', value: 'secondary', description: 'Cinza' },
+              { label: 'Success', value: 'success', description: 'Verde' },
+              { label: 'Danger', value: 'danger', description: 'Vermelho' }
+            ]).setMinValues(1).setMaxValues(1);
+            const selRowType = new ActionRowBuilder().addComponents(selType);
+            const selRowStyle = new ActionRowBuilder().addComponents(selStyle);
+            const advFields = new ActionRowBuilder().addComponents(
+              new ButtonBuilder().setCustomId(`message_edit_add_field:${key}`).setLabel('➕ Adicionar Field').setStyle(ButtonStyle.Secondary)
+            );
+            rows.push(adv1, adv2, advTitle, advButtons, advFields, selRowType, selRowStyle);
+          }
+        } catch (e) { /* ignore */ }
+
         return rows;
       };
 
@@ -345,6 +389,183 @@ module.exports = {
             return;
           }
 
+          // Add button directly from main panel (shows ephemeral choice URL / Webhook)
+          if (action === 'message_add_button') {
+            if (!session.container) return i.reply({ content: 'Crie um container primeiro (➕ Adicionar).', ephemeral: true });
+            try {
+              const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`message_add_button_url:${id}`).setLabel('➕ URL').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId(`message_add_button_webhook:${id}`).setLabel('➕ Webhook').setStyle(ButtonStyle.Success)
+              );
+              return i.reply({ content: 'Escolha o tipo de botão que deseja adicionar:', components: [row], ephemeral: true });
+            } catch (err) {
+              console.error('Erro ao mostrar opções de botão:', err);
+              return i.reply({ content: 'Erro ao abrir opções de botão.', ephemeral: true });
+            }
+          }
+
+          // Handler for quick-add URL button (from panel)
+          if (action === 'message_add_button_url') {
+            const existing = session.container;
+            if (!existing) return i.reply({ content: 'Nenhum container criado ainda.', ephemeral: true });
+            try {
+              const modal = new ModalBuilder().setCustomId(`message_modal_add_button_url:${id}`).setTitle('Adicionar Botão (URL)');
+              modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_label').setLabel('Rótulo do botão').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_url').setLabel('URL (https://...)').setStyle(TextInputStyle.Short).setRequired(true))
+              );
+              await i.showModal(modal);
+              const submitted = await i.awaitModalSubmit({ time: 2 * 60 * 1000, filter: m => m.user.id === interaction.user.id });
+              const label = submitted.fields.getTextInputValue('b_label') || 'Abrir';
+              const url = submitted.fields.getTextInputValue('b_url') || null;
+              const style = 'link';
+              existing.buttons = existing.buttons || [];
+              existing.buttons.push({ type: 'url', label, url, style });
+              await submitted.reply({ content: 'Botão (URL) adicionado ao container.', ephemeral: true }).catch(()=>{});
+              await refreshPanel();
+            } catch (err) {
+              console.error('Erro ao adicionar botão URL (painel):', err);
+              return i.reply({ content: 'Erro ao adicionar botão.', ephemeral: true });
+            }
+            return;
+          }
+
+          // Manage buttons: list current buttons in a select so user can remove them
+          if (action === 'message_manage_buttons') {
+            const existing = session.container;
+            if (!existing || !existing.buttons || !existing.buttons.length) return i.reply({ content: 'Nenhum botão adicionado ao container.', ephemeral: true });
+            try {
+              const { ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
+              const options = existing.buttons.map((b, idx) => ({ label: b.label || `(button ${idx})`, value: String(idx), description: b.type === 'url' ? 'URL' : 'Webhook' }));
+              const sel = new StringSelectMenuBuilder().setCustomId(`message_manage_buttons_select:${id}`).setPlaceholder('Selecione um botão para remover...').addOptions(options).setMinValues(1).setMaxValues(1);
+              const row = new ActionRowBuilder().addComponents(sel);
+              return i.reply({ content: 'Selecione o botão que quer remover (será removido imediatamente).', components: [row], ephemeral: true });
+            } catch (err) {
+              console.error('Erro ao listar botões:', err);
+              return i.reply({ content: 'Erro ao listar botões.', ephemeral: true });
+            }
+          }
+
+          // Handle selection from manage buttons select
+          if (action === 'message_manage_buttons_select') {
+            const existing = session.container;
+            if (!existing || !existing.buttons || !existing.buttons.length) return i.reply({ content: 'Nenhum botão adicionado ao container.', ephemeral: true });
+            const selIdx = Number(arg || (i.values && i.values[0]));
+            if (Number.isNaN(selIdx) || selIdx < 0 || selIdx >= existing.buttons.length) return i.reply({ content: 'Índice inválido selecionado.', ephemeral: true });
+            const removed = existing.buttons.splice(selIdx, 1);
+            await i.update({ content: `Botão removido: ${removed && removed[0] && removed[0].label ? removed[0].label : 'item'}.`, components: [], embeds: [] }).catch(()=>{});
+            await refreshPanel();
+            return;
+          }
+
+          // Panel style select: set default style for webhook buttons in this session
+          if (action === 'message_panel_button_style') {
+            const existing = session.container;
+            if (!existing) return i.reply({ content: 'Crie um container primeiro.', ephemeral: true });
+            const chosen = i.values && i.values[0] ? i.values[0] : null;
+            if (!chosen) return i.reply({ content: 'Estilo inválido.', ephemeral: true });
+            existing.buttonDefaultStyle = chosen;
+            return i.reply({ content: `Estilo padrão para webhooks definido: ${chosen}`, ephemeral: true });
+          }
+
+          // Panel type select: open modal to add URL or Webhook button using panel style
+          if (action === 'message_panel_button_type') {
+            const existing = session.container;
+            if (!existing) return i.reply({ content: 'Crie um container primeiro.', ephemeral: true });
+            const chosenType = i.values && i.values[0] ? i.values[0] : null;
+            if (!chosenType) return i.reply({ content: 'Tipo inválido.', ephemeral: true });
+            const style = existing.buttonDefaultStyle || 'primary';
+            try {
+              if (chosenType === 'url') {
+                const modal = new ModalBuilder().setCustomId(`message_modal_add_button_url:${id}`).setTitle('Adicionar Botão (URL)');
+                modal.addComponents(
+                  new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_label').setLabel('Rótulo do botão').setStyle(TextInputStyle.Short).setRequired(true)),
+                  new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_url').setLabel('URL (https://...)').setStyle(TextInputStyle.Short).setRequired(true))
+                );
+                await i.showModal(modal);
+                const submitted = await i.awaitModalSubmit({ time: 2 * 60 * 1000, filter: m => m.user.id === interaction.user.id });
+                if (!submitted) return;
+                const label = submitted.fields.getTextInputValue('b_label') || 'Abrir';
+                const url = submitted.fields.getTextInputValue('b_url') || null;
+                existing.buttons = existing.buttons || [];
+                existing.buttons.push({ type: 'url', label, url, style: 'link' });
+                await submitted.reply({ content: 'Botão (URL) adicionado ao container.', ephemeral: true }).catch(()=>{});
+                await refreshPanel();
+                return;
+              }
+
+              if (chosenType === 'webhook') {
+                const modal = new ModalBuilder().setCustomId(`message_modal_add_button_webhook:${id}:${style}`).setTitle('Adicionar Botão (Webhook)');
+                modal.addComponents(
+                  new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_label').setLabel('Rótulo do botão').setStyle(TextInputStyle.Short).setRequired(true)),
+                  new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_webhook').setLabel('URL do webhook (https://...)').setStyle(TextInputStyle.Short).setRequired(true))
+                );
+                await i.showModal(modal);
+                const submitted = await i.awaitModalSubmit({ time: 2 * 60 * 1000, filter: m => m.user.id === interaction.user.id });
+                if (!submitted) return;
+                const label = submitted.fields.getTextInputValue('b_label') || 'Ação';
+                const webhookUrl = submitted.fields.getTextInputValue('b_webhook') || null;
+                existing.buttons = existing.buttons || [];
+                existing.buttons.push({ type: 'webhook', label, webhookUrl, style });
+                await submitted.reply({ content: 'Botão (Webhook) adicionado ao container.', ephemeral: true }).catch(()=>{});
+                await refreshPanel();
+                return;
+              }
+            } catch (err) {
+              console.error('Erro ao processar seleção de tipo painel:', err);
+              return i.reply({ content: 'Erro ao criar botão via painel.', ephemeral: true });
+            }
+          }
+
+          // Handler for quick-add Webhook button (from panel) - uses select then modal
+          if (action === 'message_add_button_webhook') {
+            const existing = session.container;
+            if (!existing) return i.reply({ content: 'Nenhum container criado ainda.', ephemeral: true });
+            try {
+              const { ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
+              const sel = new StringSelectMenuBuilder()
+                .setCustomId(`message_select_button_style:${id}`)
+                .setPlaceholder('Escolha o estilo do botão (cor)')
+                .addOptions([
+                  { label: 'Primary', value: 'primary', description: 'Cor padrão (azul) - destaque' },
+                  { label: 'Secondary', value: 'secondary', description: 'Cinza' },
+                  { label: 'Success', value: 'success', description: 'Verde' },
+                  { label: 'Danger', value: 'danger', description: 'Vermelho' }
+                ])
+                .setMinValues(1).setMaxValues(1);
+
+              const row = new ActionRowBuilder().addComponents(sel);
+              const styleMsg = await i.reply({ content: 'Escolha o estilo para o botão webhook:', components: [row], ephemeral: true, fetchReply: true });
+              const collected = await styleMsg.awaitMessageComponent({ filter: b => b.user.id === interaction.user.id, time: 2 * 60 * 1000 }).catch(() => null);
+              if (!collected) {
+                try { await i.followUp({ content: 'Tempo esgotado: nenhum estilo selecionado.', ephemeral: true }); } catch {}
+                return;
+              }
+              const chosen = collected.values && collected.values[0] ? collected.values[0] : 'primary';
+              const modal = new ModalBuilder().setCustomId(`message_modal_add_button_webhook:${id}:${chosen}`).setTitle('Adicionar Botão (Webhook)');
+              modal.addComponents(
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_label').setLabel('Rótulo do botão').setStyle(TextInputStyle.Short).setRequired(true)),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_webhook').setLabel('URL do webhook (https://...)').setStyle(TextInputStyle.Short).setRequired(true))
+              );
+              await collected.showModal(modal);
+              const submitted = await collected.awaitModalSubmit({ time: 2 * 60 * 1000, filter: m => m.user.id === interaction.user.id }).catch(() => null);
+              if (!submitted) {
+                try { await i.followUp({ content: 'Tempo esgotado ao preencher o modal.', ephemeral: true }); } catch {}
+                return;
+              }
+              const label = submitted.fields.getTextInputValue('b_label') || 'Ação';
+              const webhookUrl = submitted.fields.getTextInputValue('b_webhook') || null;
+              existing.buttons = existing.buttons || [];
+              existing.buttons.push({ type: 'webhook', label, webhookUrl, style: chosen });
+              await submitted.reply({ content: 'Botão (Webhook) adicionado ao container.', ephemeral: true }).catch(()=>{});
+              await refreshPanel();
+            } catch (err) {
+              console.error('Erro ao adicionar botão webhook (painel):', err);
+              return i.reply({ content: 'Erro ao criar botão webhook.', ephemeral: true });
+            }
+            return;
+          }
+
           // REMOVE (single container)
           if (action === 'message_remove') {
             if (!session.container) return i.update({ content: 'Nenhum container para remover.', ephemeral: true, components: makeRows(id) }).catch(()=>{});
@@ -424,8 +645,10 @@ module.exports = {
               const submitted = await i.awaitModalSubmit({ time: 2 * 60 * 1000, filter: m => m.user.id === interaction.user.id });
               const label = submitted.fields.getTextInputValue('b_label') || 'Abrir';
               const url = submitted.fields.getTextInputValue('b_url') || null;
+              // URL buttons must use Link style
+              const style = 'link';
               existing.buttons = existing.buttons || [];
-              existing.buttons.push({ type: 'url', label, url });
+              existing.buttons.push({ type: 'url', label, url, style });
               await submitted.reply({ content: 'Botão (URL) adicionado.', ephemeral: true }).catch(()=>{});
               await refreshPanel();
             } catch (err) {
@@ -440,19 +663,51 @@ module.exports = {
             const existing = session.container;
             if (!existing) return i.reply({ content: 'Nenhum container criado ainda.', ephemeral: true });
             try {
-              const modal = new ModalBuilder().setCustomId(`message_modal_add_button_webhook:${id}`).setTitle('Adicionar Botão (Webhook)');
-              modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_label').setLabel('Rótulo do botão').setStyle(TextInputStyle.Short).setRequired(true)),
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_webhook').setLabel('URL do webhook (https://...)').setStyle(TextInputStyle.Short).setRequired(true))
-              );
-              await i.showModal(modal);
-              const submitted = await i.awaitModalSubmit({ time: 2 * 60 * 1000, filter: m => m.user.id === interaction.user.id });
-              const label = submitted.fields.getTextInputValue('b_label') || 'Ação';
-              const webhookUrl = submitted.fields.getTextInputValue('b_webhook') || null;
-              existing.buttons = existing.buttons || [];
-              existing.buttons.push({ type: 'webhook', label, webhookUrl });
-              await submitted.reply({ content: 'Botão (Webhook) adicionado.', ephemeral: true }).catch(()=>{});
-              await refreshPanel();
+              // First ask the user to choose a style via select (better UX than text input)
+              try {
+                const { ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
+                const sel = new StringSelectMenuBuilder()
+                  .setCustomId(`message_select_button_style:${id}`)
+                  .setPlaceholder('Escolha o estilo do botão (cor)')
+                  .addOptions([
+                    { label: 'Primary', value: 'primary', description: 'Cor padrão (azul) - destaque' },
+                    { label: 'Secondary', value: 'secondary', description: 'Cinza' },
+                    { label: 'Success', value: 'success', description: 'Verde' },
+                    { label: 'Danger', value: 'danger', description: 'Vermelho' }
+                  ])
+                  .setMinValues(1).setMaxValues(1);
+
+                const row = new ActionRowBuilder().addComponents(sel);
+                const styleMsg = await i.reply({ content: 'Escolha o estilo para o botão webhook:', components: [row], ephemeral: true, fetchReply: true });
+                const collected = await styleMsg.awaitMessageComponent({ filter: b => b.user.id === interaction.user.id, time: 2 * 60 * 1000 }).catch(() => null);
+                if (!collected) {
+                  try { await i.followUp({ content: 'Tempo esgotado: nenhum estilo selecionado.', ephemeral: true }); } catch {}
+                  return;
+                }
+                const chosen = collected.values && collected.values[0] ? collected.values[0] : 'primary';
+                // now show modal to get label + webhook url
+                const modal = new ModalBuilder().setCustomId(`message_modal_add_button_webhook:${id}:${chosen}`).setTitle('Adicionar Botão (Webhook)');
+                modal.addComponents(
+                  new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_label').setLabel('Rótulo do botão').setStyle(TextInputStyle.Short).setRequired(true)),
+                  new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('b_webhook').setLabel('URL do webhook (https://...)').setStyle(TextInputStyle.Short).setRequired(true))
+                );
+                await collected.showModal(modal);
+                const submitted = await collected.awaitModalSubmit({ time: 2 * 60 * 1000, filter: m => m.user.id === interaction.user.id }).catch(() => null);
+                if (!submitted) {
+                  try { await i.followUp({ content: 'Tempo esgotado ao preencher o modal.', ephemeral: true }); } catch {}
+                  return;
+                }
+                const label = submitted.fields.getTextInputValue('b_label') || 'Ação';
+                const webhookUrl = submitted.fields.getTextInputValue('b_webhook') || null;
+                existing.buttons = existing.buttons || [];
+                existing.buttons.push({ type: 'webhook', label, webhookUrl, style: chosen });
+                await submitted.reply({ content: 'Botão (Webhook) adicionado.', ephemeral: true }).catch(()=>{});
+                await refreshPanel();
+                return;
+              } catch (err) {
+                console.error('Erro ao coletar estilo e criar webhook button:', err);
+                return i.reply({ content: 'Erro ao criar botão webhook.', ephemeral: true });
+              }
             } catch (err) {
               console.error('Erro ao adicionar botão webhook:', err);
               return i.reply({ content: 'Erro ao adicionar botão.', ephemeral: true });
@@ -500,7 +755,12 @@ module.exports = {
                     btn.setStyle(ButtonStyle.Link).setURL(b.url);
                   } else if (b.type === 'webhook') {
                     const cid = `message_button_webhook:${session.id}:${bi}`;
-                    btn.setStyle(ButtonStyle.Primary).setCustomId(cid);
+                    // map style string to ButtonStyle (preview uses stored style)
+                    let pstyle = ButtonStyle.Primary;
+                    if (b.style === 'secondary') pstyle = ButtonStyle.Secondary;
+                    else if (b.style === 'success') pstyle = ButtonStyle.Success;
+                    else if (b.style === 'danger') pstyle = ButtonStyle.Danger;
+                    btn.setStyle(pstyle).setCustomId(cid);
                     try {
                       if (!interaction.client.messageButtonHooks) interaction.client.messageButtonHooks = new Map();
                       const key = `${session.id}:${bi}`;
@@ -561,8 +821,13 @@ module.exports = {
                   const btn = new ButtonBuilder().setLabel(b.label || 'Abrir');
                   if (b.type === 'url') btn.setStyle(ButtonStyle.Link).setURL(b.url);
                   else if (b.type === 'webhook') {
+                    // map style for webhook buttons (use stored style or default)
+                    let s = ButtonStyle.Primary;
+                    if (b.style === 'secondary') s = ButtonStyle.Secondary;
+                    else if (b.style === 'success') s = ButtonStyle.Success;
+                    else if (b.style === 'danger') s = ButtonStyle.Danger;
                     const cid = `message_button_webhook:${session.id}:${bi}`;
-                    btn.setStyle(ButtonStyle.Primary).setCustomId(cid);
+                    btn.setStyle(s).setCustomId(cid);
                     try {
                       if (!interaction.client.messageButtonHooks) interaction.client.messageButtonHooks = new Map();
                       const key = `${session.id}:${bi}`;
@@ -585,8 +850,13 @@ module.exports = {
                     const btn = new ButtonBuilder().setLabel(b.label || 'Abrir');
                     if (b.type === 'url') btn.setStyle(ButtonStyle.Link).setURL(b.url);
                     else if (b.type === 'webhook') {
+                      // map stored style to actual ButtonStyle for the final message
+                      let s = ButtonStyle.Primary;
+                      if (b.style === 'secondary') s = ButtonStyle.Secondary;
+                      else if (b.style === 'success') s = ButtonStyle.Success;
+                      else if (b.style === 'danger') s = ButtonStyle.Danger;
                       const key = `${sent.id}:${bi}`;
-                      btn.setStyle(ButtonStyle.Primary).setCustomId(`message_button_webhook:${sent.id}:${bi}`);
+                      btn.setStyle(s).setCustomId(`message_button_webhook:${sent.id}:${bi}`);
                       try { if (!interaction.client.messageButtonHooks) interaction.client.messageButtonHooks = new Map(); interaction.client.messageButtonHooks.set(key, b.webhookUrl); _saveButtonHook(key, b.webhookUrl); } catch(e) { console.error(e); }
                     } else btn.setStyle(ButtonStyle.Secondary).setCustomId(`message_button:${sent.id}:${bi}`);
                     newRow.addComponents(btn);
