@@ -15,6 +15,40 @@ function saveHook(k, u) {
   } catch (e) { console.error('saveHook failed', e); }
 }
 
+function normalizeStyleInput(s) {
+  if (!s) return null;
+  const v = String(s).trim().toLowerCase();
+  if (v === 'primary' || v === 'p') return 'Primary';
+  if (v === 'secondary' || v === 'sec' || v === 's') return 'Secondary';
+  if (v === 'success' || v === 'green') return 'Success';
+  if (v === 'danger' || v === 'red') return 'Danger';
+  if (v === 'link' || v === 'url') return 'Link';
+  return null;
+}
+function mapButtonStyle(s) {
+  if (!s) return BStyle.Primary;
+  const k = String(s).toLowerCase();
+  if (k === 'primary') return BStyle.Primary;
+  if (k === 'secondary') return BStyle.Secondary;
+  if (k === 'success') return BStyle.Success;
+  if (k === 'danger') return BStyle.Danger;
+  if (k === 'link') return BStyle.Link;
+  return BStyle.Primary;
+}
+
+function normalizeHexColor(input) {
+  if (!input) return null;
+  let v = String(input).trim();
+  if (v.startsWith('#')) v = v.slice(1);
+  // accept 3 or 6 hex digits
+  if (!/^[0-9a-fA-F]{3}$/.test(v) && !/^[0-9a-fA-F]{6}$/.test(v)) return null;
+  if (v.length === 3) {
+    // expand shorthand e.g. 'f00' -> 'ff0000'
+    v = v.split('').map(c => c + c).join('');
+  }
+  return '#' + v.toLowerCase();
+}
+
 module.exports = {
   data: new SCB().setName('message').setDescription('Criar mensagem simples').addChannelOption(o => o.setName('channel').setDescription('Canal (opcional)').setRequired(false)),
   async execute(interaction) {
@@ -45,6 +79,9 @@ module.exports = {
         if (c.description) e.setDescription(c.description);
         if (c.image) e.setImage(c.image);
         if (c.imageText) e.setFooter({ text: c.imageText });
+        if (c.color) {
+          try { e.setColor(c.color); } catch (e2) { /* ignore invalid */ }
+        }
         if (c.buttons && c.buttons.length) e.addFields({ name: 'Botões', value: `${c.buttons.length} adicionados`, inline: false });
       }
       try {
@@ -81,16 +118,22 @@ module.exports = {
           modal.addComponents(
             new ARB().addComponents(new TIB().setCustomId('t_title').setLabel('Título').setStyle(TIS.Short).setRequired(false)),
             new ARB().addComponents(new TIB().setCustomId('t_desc').setLabel('Descrição').setStyle(TIS.Paragraph).setRequired(false)),
-            new ARB().addComponents(new TIB().setCustomId('t_imgtext').setLabel('Legenda (opcional)').setStyle(TIS.Short).setRequired(false))
+            new ARB().addComponents(new TIB().setCustomId('t_imgtext').setLabel('Legenda (opcional)').setStyle(TIS.Short).setRequired(false)),
+            new ARB().addComponents(new TIB().setCustomId('t_color').setLabel('Cor do embed (hex, ex: #ff0000)').setStyle(TIS.Short).setRequired(false))
           );
-          await i.showModal(modal);
           try {
             const sub = await i.awaitModalSubmit({ time: 2*60*1000, filter: m => m.user.id === interaction.user.id });
             const title = sub.fields.getTextInputValue('t_title') || null;
             const description = sub.fields.getTextInputValue('t_desc') || null;
             const imageText = sub.fields.getTextInputValue('t_imgtext') || null;
+            const colorRaw = sub.fields.getTextInputValue('t_color') || null;
+            const color = normalizeHexColor(colorRaw);
             session.container = { title, description, image: null, imageText, buttons: [] };
-            await sub.reply({ content: 'Container criado. Você pode enviar imagem via DM (opcional) ou adicionar botões.', ephemeral: true });
+            if (color) session.container.color = color;
+            let replyMsg = 'Container criado. Você pode enviar imagem via DM (opcional) ou adicionar botões.';
+            if (colorRaw && !color) replyMsg += ' (cor inválida fornecida; será ignorada — use #RRGGBB)';
+            else if (color) replyMsg += ` (cor aplicada: ${color})`;
+            await sub.reply({ content: replyMsg, ephemeral: true });
             await refresh();
           } catch {}
           return;
@@ -129,16 +172,22 @@ module.exports = {
           const modal = new MB().setCustomId(`modal_btn_url:${sid}`).setTitle('Botão URL');
           modal.addComponents(new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)), new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true)));
           await i.showModal(modal);
-          try { const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id }); session.container.buttons = session.container.buttons||[]; session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url') }); await sub.reply({ content:'Botão URL adicionado.', ephemeral:true }); await refresh(); } catch {}
+          try {
+            const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id });
+            session.container.buttons = session.container.buttons||[];
+            session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url'), style: 'link' });
+            await sub.reply({ content:'Botão URL adicionado.', ephemeral:true });
+            await refresh();
+          } catch {}
           session.awaitingButtonType = false;
           return;
         }
 
         if (act === 'btn_hook') {
           const modal = new MB().setCustomId(`modal_btn_hook:${sid}`).setTitle('Botão Webhook');
-          modal.addComponents(new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)), new ARB().addComponents(new TIB().setCustomId('hook').setLabel('Webhook URL').setStyle(TIS.Short).setRequired(true)));
+          modal.addComponents(new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)), new ARB().addComponents(new TIB().setCustomId('hook').setLabel('Webhook URL').setStyle(TIS.Short).setRequired(true)), new ARB().addComponents(new TIB().setCustomId('b_style').setLabel('Cor do botão (Primary/Secondary/Success/Danger)').setStyle(TIS.Short).setRequired(false)));
           await i.showModal(modal);
-          try { const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id }); session.container.buttons = session.container.buttons||[]; session.container.buttons.push({ type:'webhook', label: sub.fields.getTextInputValue('lbl'), hook: sub.fields.getTextInputValue('hook') }); await sub.reply({ content:'Botão webhook adicionado.', ephemeral:true }); session.awaitingButtonType = false; await refresh(); } catch {}
+          try { const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id }); session.container.buttons = session.container.buttons||[]; const rawStyle = sub.fields.getTextInputValue('b_style') || 'Primary'; const bstyle = normalizeStyleInput(rawStyle) || 'Primary'; session.container.buttons.push({ type:'webhook', label: sub.fields.getTextInputValue('lbl'), hook: sub.fields.getTextInputValue('hook'), style: bstyle }); await sub.reply({ content:'Botão webhook adicionado.', ephemeral:true }); session.awaitingButtonType = false; await refresh(); } catch {}
           return;
         }
 
@@ -152,7 +201,37 @@ module.exports = {
         if (act === 'clear') { session.container = null; await i.reply({ content: 'Container limpo.', ephemeral: true }); await refresh(); return; }
         if (act === 'preview') {
           if (!session.container) return i.reply({ content: 'Nenhum container.', ephemeral: true });
-          try { const ch = await interaction.client.channels.fetch(session.channelId); const c = session.container; const e = new EB(); if (c.title) e.setTitle(c.title); if (c.description) e.setDescription(c.description); if (c.image) e.setImage(c.image); if (c.imageText) e.setFooter({ text: c.imageText }); const comps = []; if (c.buttons && c.buttons.length) { const r = new ARB(); c.buttons.slice(0,5).forEach((b,i)=>{ const btn = new BB().setLabel(b.label||`btn${i}`); if (b.type==='url') btn.setStyle(BStyle.Link).setURL(b.url||b.hook||''); else if (b.type==='webhook') btn.setStyle(BStyle.Primary).setCustomId(`hook_preview:${sid}:${i}`); else btn.setStyle(BStyle.Secondary).setCustomId(`btn:${sid}:${i}`); r.addComponents(btn); }); comps.push(r); } await ch.send({ content:`Pré-visualização por ${interaction.user.tag}:`, embeds:[e], components:comps }); await i.reply({ content:'Pré-visualização enviada.', ephemeral:true }); } catch (err) { console.error(err); await i.reply({ content:'Erro na pré-visualização.', ephemeral:true }); }
+          try {
+            const ch = await interaction.client.channels.fetch(session.channelId);
+            const c = session.container;
+            const e = new EB();
+            if (c.title) e.setTitle(c.title);
+            if (c.description) e.setDescription(c.description);
+            if (c.image) e.setImage(c.image);
+            if (c.imageText) e.setFooter({ text: c.imageText });
+            if (c.color) { try { e.setColor(c.color); } catch {} }
+            const comps = [];
+            if (c.buttons && c.buttons.length) {
+              const r = new ARB();
+              c.buttons.slice(0,5).forEach((b,i) => {
+                const btn = new BB().setLabel(b.label||`btn${i}`);
+                if (b.type === 'url') {
+                  btn.setStyle(BStyle.Link);
+                  try { btn.setURL(b.url||b.hook||''); } catch {}
+                } else if (b.type === 'webhook') {
+                  btn.setStyle(mapButtonStyle(b.style));
+                  btn.setCustomId(`hook_preview:${sid}:${i}`);
+                } else {
+                  btn.setStyle(BStyle.Secondary);
+                  btn.setCustomId(`btn:${sid}:${i}`);
+                }
+                r.addComponents(btn);
+              });
+              comps.push(r);
+            }
+            await ch.send({ content:`Pré-visualização por ${interaction.user.tag}:`, embeds:[e], components:comps });
+            await i.reply({ content:'Pré-visualização enviada.', ephemeral:true });
+          } catch (err) { console.error(err); await i.reply({ content:'Erro na pré-visualização.', ephemeral:true }); }
           return;
         }
 
@@ -160,17 +239,30 @@ module.exports = {
           if (!session.container) return i.reply({ content: 'Nenhum container.', ephemeral: true });
           try {
             const ch = await interaction.client.channels.fetch(session.channelId);
-            const c = session.container; const e = new EB(); if (c.title) e.setTitle(c.title); if (c.description) e.setDescription(c.description); if (c.image) e.setImage(c.image); if (c.imageText) e.setFooter({ text: c.imageText });
+            const c = session.container;
+            const e = new EB();
+            if (c.title) e.setTitle(c.title);
+            if (c.description) e.setDescription(c.description);
+            if (c.image) e.setImage(c.image);
+            if (c.imageText) e.setFooter({ text: c.imageText });
+            if (c.color) { try { e.setColor(c.color); } catch {} }
 
             // Build components: for webhook buttons we use a temporary customId and will rewrite after sending
             const comps = [];
             if (c.buttons && c.buttons.length) {
               const r = new ARB();
-              c.buttons.slice(0,5).forEach((b,i)=>{
+              c.buttons.slice(0,5).forEach((b,i) => {
                 const btn = new BB().setLabel(b.label||`btn${i}`);
-                if (b.type === 'url') btn.setStyle(BStyle.Link).setURL(b.url||b.hook||'');
-                else if (b.type === 'webhook') btn.setStyle(BStyle.Primary).setCustomId(`message_button_tmp:${i}`);
-                else btn.setStyle(BStyle.Secondary).setCustomId(`btn:${sid}:${i}`);
+                if (b.type === 'url') {
+                  btn.setStyle(BStyle.Link);
+                  try { btn.setURL(b.url||b.hook||''); } catch {}
+                } else if (b.type === 'webhook') {
+                  btn.setStyle(mapButtonStyle(b.style));
+                  btn.setCustomId(`message_button_tmp:${i}`);
+                } else {
+                  btn.setStyle(BStyle.Secondary);
+                  btn.setCustomId(`btn:${sid}:${i}`);
+                }
                 r.addComponents(btn);
               });
               comps.push(r);
