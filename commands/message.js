@@ -122,6 +122,7 @@ module.exports = {
             new ARB().addComponents(new TIB().setCustomId('t_color').setLabel('Cor do embed (hex, ex: #ff0000)').setStyle(TIS.Short).setRequired(false))
           );
           try {
+            await i.showModal(modal);
             const sub = await i.awaitModalSubmit({ time: 2*60*1000, filter: m => m.user.id === interaction.user.id });
             const title = sub.fields.getTextInputValue('t_title') || null;
             const description = sub.fields.getTextInputValue('t_desc') || null;
