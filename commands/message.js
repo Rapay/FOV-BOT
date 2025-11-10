@@ -49,6 +49,24 @@ function normalizeHexColor(input) {
   return '#' + v.toLowerCase();
 }
 
+function mapHexToStyle(hex) {
+  if (!hex) return null;
+  // hex expected as #rrggbb
+  try {
+    let v = String(hex).trim();
+    if (v.startsWith('#')) v = v.slice(1);
+    const r = parseInt(v.slice(0,2),16);
+    const g = parseInt(v.slice(2,4),16);
+    const b = parseInt(v.slice(4,6),16);
+    // choose dominant color
+    if (g > r && g > b) return BStyle.Success; // green
+    if (r > g && r > b) return BStyle.Danger; // red
+    if (b > r && b > g) return BStyle.Primary; // blue
+    // fallback
+    return BStyle.Secondary;
+  } catch (e) { return null; }
+}
+
 module.exports = {
   data: new SCB().setName('message').setDescription('Criar mensagem simples').addChannelOption(o => o.setName('channel').setDescription('Canal (opcional)').setRequired(false)),
   async execute(interaction) {
@@ -272,6 +290,8 @@ module.exports = {
                         targetBtn.url = res.fields.getTextInputValue('url');
                         const rawHex = res.fields.getTextInputValue('b_hex') || null;
                         targetBtn.hex = normalizeHexColor(rawHex);
+                        // if user edited the button hex, apply it to the container embed color as well
+                        if (targetBtn.hex) session.container.color = targetBtn.hex;
                         await res.reply({ content: 'Botão atualizado.', ephemeral: true });
                         await refresh();
                       } catch {}
@@ -292,6 +312,8 @@ module.exports = {
                         targetBtn.style = normalizeStyleInput(raw) || 'Primary';
                         const rawHex = res.fields.getTextInputValue('b_hex') || null;
                         targetBtn.hex = normalizeHexColor(rawHex);
+                        // if user edited the button hex, apply it to the container embed color as well
+                        if (targetBtn.hex) session.container.color = targetBtn.hex;
                         await res.reply({ content: 'Botão atualizado.', ephemeral: true });
                         await refresh();
                       } catch {}
@@ -318,6 +340,8 @@ module.exports = {
             const rawHex = sub.fields.getTextInputValue('b_hex') || null;
             const hex = normalizeHexColor(rawHex);
             session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url'), style: 'link', hex });
+            // if user provided a hex for the button, apply it to the embed color as well (same UX as embed color)
+            if (hex) session.container.color = hex;
             await sub.reply({ content:'Botão URL adicionado.', ephemeral:true });
             await refresh();
           } catch {}
@@ -342,6 +366,8 @@ module.exports = {
             const rawHex = sub.fields.getTextInputValue('b_hex') || null;
             const hex = normalizeHexColor(rawHex);
             session.container.buttons.push({ type:'webhook', label: sub.fields.getTextInputValue('lbl'), hook: sub.fields.getTextInputValue('hook'), style: bstyle, hex });
+            // apply the hex to the embed color for parity with embed color field
+            if (hex) session.container.color = hex;
             await sub.reply({ content:'Botão webhook adicionado.', ephemeral:true });
             session.awaitingButtonType = false; await refresh();
           } catch {}
@@ -376,7 +402,9 @@ module.exports = {
                   btn.setStyle(BStyle.Link);
                   try { btn.setURL(b.url||b.hook||''); } catch {}
                 } else if (b.type === 'webhook') {
-                  btn.setStyle(mapButtonStyle(b.style));
+                  // prefer hex-based mapping if provided, otherwise use textual style
+                  const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
+                  if (hexStyle) btn.setStyle(hexStyle); else btn.setStyle(mapButtonStyle(b.style));
                   btn.setCustomId(`hook_preview:${sid}:${i}`);
                 } else {
                   btn.setStyle(BStyle.Secondary);
@@ -414,7 +442,9 @@ module.exports = {
                   btn.setStyle(BStyle.Link);
                   try { btn.setURL(b.url||b.hook||''); } catch {}
                 } else if (b.type === 'webhook') {
-                  btn.setStyle(mapButtonStyle(b.style));
+                  // prefer hex-based mapping if provided, otherwise use textual style
+                  const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
+                  if (hexStyle) btn.setStyle(hexStyle); else btn.setStyle(mapButtonStyle(b.style));
                   btn.setCustomId(`message_button_tmp:${i}`);
                 } else {
                   btn.setStyle(BStyle.Secondary);
