@@ -47,7 +47,27 @@ module.exports = {
         if (c.imageText) e.setFooter({ text: c.imageText });
         if (c.buttons && c.buttons.length) e.addFields({ name: 'Botões', value: `${c.buttons.length} adicionados`, inline: false });
       }
-      try { await panel.edit({ embeds: [e], components: controls(sid) }); } catch {}
+      try {
+        const base = controls(sid);
+        // if a container exists, show the optional actions in a second row so the main collector handles them
+        if (session.container) {
+          const extra = new ARB().addComponents(
+            new BB().setCustomId(`uploaddm:${sid}`).setLabel('📤 Upload (DM)').setStyle(BStyle.Primary),
+            new BB().setCustomId(`addbtn:${sid}`).setLabel('➕ Adicionar Botão').setStyle(BStyle.Secondary),
+            new BB().setCustomId(`done:${sid}`).setLabel('✅ Concluído').setStyle(BStyle.Success)
+          );
+          base.push(extra);
+        }
+        // If we're awaiting the choice of button type, show the URL/webhook options on the panel
+        if (session.awaitingButtonType) {
+          const choiceRow = new ARB().addComponents(
+            new BB().setCustomId(`btn_url:${sid}`).setLabel('URL').setStyle(BStyle.Primary),
+            new BB().setCustomId(`btn_hook:${sid}`).setLabel('Webhook').setStyle(BStyle.Success)
+          );
+          base.push(choiceRow);
+        }
+        await panel.edit({ embeds: [e], components: base });
+      } catch {}
     };
 
     const coll = panel.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id, time: 10*60*1000 });
@@ -72,12 +92,6 @@ module.exports = {
             session.container = { title, description, image: null, imageText, buttons: [] };
             await sub.reply({ content: 'Container criado. Você pode enviar imagem via DM (opcional) ou adicionar botões.', ephemeral: true });
             await refresh();
-            const follow = new ARB().addComponents(
-              new BB().setCustomId(`uploaddm:${sid}`).setLabel('📤 Upload (DM)').setStyle(BStyle.Primary),
-              new BB().setCustomId(`addbtn:${sid}`).setLabel('➕ Adicionar Botão').setStyle(BStyle.Secondary),
-              new BB().setCustomId(`done:${sid}`).setLabel('✅ Concluído').setStyle(BStyle.Success)
-            );
-            await sub.followUp({ content: 'Ações adicionais (opcional):', components: [follow], ephemeral: true });
           } catch {}
           return;
         }
@@ -100,11 +114,15 @@ module.exports = {
           } catch (err) { console.error('DM upload error', err); return i.reply({ content: 'Não foi possível abrir DM.', ephemeral: true }); }
           return;
         }
-
         if (act === 'addbtn') {
           if (!session.container) return i.reply({ content: 'Crie o container primeiro.', ephemeral: true });
-          const choice = new ARB().addComponents(new BB().setCustomId(`btn_url:${sid}`).setLabel('URL').setStyle(BStyle.Primary), new BB().setCustomId(`btn_hook:${sid}`).setLabel('Webhook').setStyle(BStyle.Success));
-          return i.reply({ content: 'Escolha o tipo de botão:', components: [choice], ephemeral: true });
+          // Mark that we're awaiting a button-type selection and refresh the panel so the main collector will capture the choice
+          try {
+            await i.deferUpdate();
+          } catch {}
+          session.awaitingButtonType = true;
+          await refresh();
+          return;
         }
 
         if (act === 'btn_url') {
@@ -112,6 +130,7 @@ module.exports = {
           modal.addComponents(new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)), new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true)));
           await i.showModal(modal);
           try { const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id }); session.container.buttons = session.container.buttons||[]; session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url') }); await sub.reply({ content:'Botão URL adicionado.', ephemeral:true }); await refresh(); } catch {}
+          session.awaitingButtonType = false;
           return;
         }
 
@@ -119,7 +138,14 @@ module.exports = {
           const modal = new MB().setCustomId(`modal_btn_hook:${sid}`).setTitle('Botão Webhook');
           modal.addComponents(new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)), new ARB().addComponents(new TIB().setCustomId('hook').setLabel('Webhook URL').setStyle(TIS.Short).setRequired(true)));
           await i.showModal(modal);
-          try { const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id }); session.container.buttons = session.container.buttons||[]; session.container.buttons.push({ type:'webhook', label: sub.fields.getTextInputValue('lbl'), hook: sub.fields.getTextInputValue('hook') }); await sub.reply({ content:'Botão webhook adicionado.', ephemeral:true }); await refresh(); } catch {}
+          try { const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id }); session.container.buttons = session.container.buttons||[]; session.container.buttons.push({ type:'webhook', label: sub.fields.getTextInputValue('lbl'), hook: sub.fields.getTextInputValue('hook') }); await sub.reply({ content:'Botão webhook adicionado.', ephemeral:true }); session.awaitingButtonType = false; await refresh(); } catch {}
+          return;
+        }
+
+        if (act === 'done') {
+          try { await i.reply({ content: 'Concluído.', ephemeral: true }); } catch {}
+          session.awaitingButtonType = false;
+          await refresh();
           return;
         }
 
