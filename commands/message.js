@@ -152,26 +152,26 @@ module.exports = {
             const confirmRow = new ARB().addComponents(new BB().setCustomId(`dm_confirm:${sid}`).setLabel('📤 Confirmar upload').setStyle(BStyle.Primary));
             const dmMsg = await dm.send({ content: 'Envie abaixo a imagem que deseja usar. Quando terminar, clique em **Confirmar upload** (60s).', components: [confirmRow] });
 
-            // Look for any recent attachments first
+            // Look for any recent attachments first — but DO NOT apply automatically.
+            // Store it as a pending image and require the user to click Confirm to apply.
             const recent = await dm.messages.fetch({ limit: 10 }).catch(()=>null);
             if (recent) {
               const found = recent.find(m => m.author.id === user.id && m.attachments && m.attachments.size>0);
               if (found) {
-                session.container.image = found.attachments.first().url;
-                try { await dm.send('Imagem aplicada automaticamente.'); } catch {}
-                try { await i.followUp({ content: 'Imagem aplicada automaticamente (anterior enviada).', ephemeral: true }); } catch {}
-                // disable confirm button
-                try { await dmMsg.edit({ components: [ new ARB().addComponents(new BB().setCustomId('dm_confirm_disabled').setLabel('✔️ Confirmado').setStyle(BStyle.Success).setDisabled(true)) ] }); } catch {}
+                session.pendingImage = found.attachments.first().url;
+                try { await dm.send('Encontrei uma imagem recente na DM. Clique em **Confirmar upload** para aplicá-la.'); } catch {}
+                try { await i.followUp({ content: 'Imagem encontrada na DM — clique em Confirmar upload para aplicá-la.', ephemeral: true }); } catch {}
                 await refresh();
-                return;
+                // do not return; still wait for confirm
               }
             }
 
             // Collect messages with attachments
             const dcoll = dm.createMessageCollector({ filter: m => m.author.id === user.id && m.attachments && m.attachments.size>0, max:1, time:60*1000 });
             dcoll.on('collect', async m => {
-              session.container.image = m.attachments.first().url;
-              try { await dm.send('Imagem recebida. Clique em Confirmar upload para aplicar.'); } catch {}
+              // store pending image, only apply on explicit confirm
+              session.pendingImage = m.attachments.first().url;
+              try { await dm.send('Imagem recebida. Clique em **Confirmar upload** para aplicá-la.'); } catch {}
               await refresh();
             });
             dcoll.on('end', collected => { if (!collected || collected.size===0) try{ dm.send('Tempo esgotado: nenhuma imagem recebida.'); } catch{} });
@@ -181,20 +181,23 @@ module.exports = {
             compColl.on('collect', async btnI => {
               try {
                 await btnI.deferUpdate();
-                // if we already have an attachment from the collector, use it
-                if (session.container.image) {
+                // only apply if there's a pendingImage set by the user
+                if (session.pendingImage) {
+                  session.container.image = session.pendingImage;
+                  delete session.pendingImage;
                   try { await dm.send('Upload confirmado. Imagem aplicada.'); } catch {}
                   try { await i.followUp({ content: 'Imagem aplicada.', ephemeral: true }); } catch {}
                   try { await dmMsg.edit({ components: [ new ARB().addComponents(new BB().setCustomId('dm_confirm_disabled').setLabel('✔️ Confirmado').setStyle(BStyle.Success).setDisabled(true)) ] }); } catch {}
                   await refresh();
                   return;
                 }
-                // otherwise try to fetch recent messages again to find an attachment the user sent
+                // otherwise, check recent messages as a last resort (but still require explicit confirmation)
                 const nowRecent = await dm.messages.fetch({ limit: 10 }).catch(()=>null);
                 if (nowRecent) {
                   const found = nowRecent.find(m => m.author.id === user.id && m.attachments && m.attachments.size>0);
                   if (found) {
                     session.container.image = found.attachments.first().url;
+                    delete session.pendingImage;
                     try { await dm.send('Upload confirmado. Imagem aplicada.'); } catch {}
                     try { await i.followUp({ content: 'Imagem aplicada.', ephemeral: true }); } catch {}
                     try { await dmMsg.edit({ components: [ new ARB().addComponents(new BB().setCustomId('dm_confirm_disabled').setLabel('✔️ Confirmado').setStyle(BStyle.Success).setDisabled(true)) ] }); } catch {}
@@ -257,18 +260,29 @@ module.exports = {
                     if (!targetBtn) return ai.reply({ content: 'Botão inexistente.', ephemeral: true });
                     if (targetBtn.type === 'url') {
                       const modal = new MB().setCustomId(`modal_edit_url:${sid}:${bIdx}`).setTitle('Editar Botão URL');
-                      modal.addComponents(new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)), new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true)));
+                      modal.addComponents(
+                        new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)),
+                        new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true)),
+                        new ARB().addComponents(new TIB().setCustomId('b_hex').setLabel('Hex do botão (opcional, ex: #ff0000)').setStyle(TIS.Short).setRequired(false))
+                      );
                       await ai.showModal(modal);
                       try {
                         const res = await ai.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id === interaction.user.id });
                         targetBtn.label = res.fields.getTextInputValue('lbl');
                         targetBtn.url = res.fields.getTextInputValue('url');
+                        const rawHex = res.fields.getTextInputValue('b_hex') || null;
+                        targetBtn.hex = normalizeHexColor(rawHex);
                         await res.reply({ content: 'Botão atualizado.', ephemeral: true });
                         await refresh();
                       } catch {}
                     } else if (targetBtn.type === 'webhook') {
                       const modal = new MB().setCustomId(`modal_edit_hook:${sid}:${bIdx}`).setTitle('Editar Botão Webhook');
-                      modal.addComponents(new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)), new ARB().addComponents(new TIB().setCustomId('hook').setLabel('Webhook URL').setStyle(TIS.Short).setRequired(true)), new ARB().addComponents(new TIB().setCustomId('b_style').setLabel('Cor do botão (Primary/Secondary/Success/Danger)').setStyle(TIS.Short).setRequired(false)));
+                      modal.addComponents(
+                        new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)),
+                        new ARB().addComponents(new TIB().setCustomId('hook').setLabel('Webhook URL').setStyle(TIS.Short).setRequired(true)),
+                        new ARB().addComponents(new TIB().setCustomId('b_style').setLabel('Cor do botão (Primary/Secondary/Success/Danger)').setStyle(TIS.Short).setRequired(false)),
+                        new ARB().addComponents(new TIB().setCustomId('b_hex').setLabel('Hex do botão (opcional, ex: #ff0000)').setStyle(TIS.Short).setRequired(false))
+                      );
                       await ai.showModal(modal);
                       try {
                         const res = await ai.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id === interaction.user.id });
@@ -276,6 +290,8 @@ module.exports = {
                         targetBtn.hook = res.fields.getTextInputValue('hook');
                         const raw = res.fields.getTextInputValue('b_style') || 'Primary';
                         targetBtn.style = normalizeStyleInput(raw) || 'Primary';
+                        const rawHex = res.fields.getTextInputValue('b_hex') || null;
+                        targetBtn.hex = normalizeHexColor(rawHex);
                         await res.reply({ content: 'Botão atualizado.', ephemeral: true });
                         await refresh();
                       } catch {}
@@ -290,12 +306,18 @@ module.exports = {
 
         if (act === 'btn_url') {
           const modal = new MB().setCustomId(`modal_btn_url:${sid}`).setTitle('Botão URL');
-          modal.addComponents(new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)), new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true)));
+          modal.addComponents(
+            new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)),
+            new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true)),
+            new ARB().addComponents(new TIB().setCustomId('b_hex').setLabel('Hex do botão (opcional, ex: #ff0000)').setStyle(TIS.Short).setRequired(false))
+          );
           await i.showModal(modal);
           try {
             const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id });
             session.container.buttons = session.container.buttons||[];
-            session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url'), style: 'link' });
+            const rawHex = sub.fields.getTextInputValue('b_hex') || null;
+            const hex = normalizeHexColor(rawHex);
+            session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url'), style: 'link', hex });
             await sub.reply({ content:'Botão URL adicionado.', ephemeral:true });
             await refresh();
           } catch {}
@@ -305,9 +327,24 @@ module.exports = {
 
         if (act === 'btn_hook') {
           const modal = new MB().setCustomId(`modal_btn_hook:${sid}`).setTitle('Botão Webhook');
-          modal.addComponents(new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)), new ARB().addComponents(new TIB().setCustomId('hook').setLabel('Webhook URL').setStyle(TIS.Short).setRequired(true)), new ARB().addComponents(new TIB().setCustomId('b_style').setLabel('Cor do botão (Primary/Secondary/Success/Danger)').setStyle(TIS.Short).setRequired(false)));
+          modal.addComponents(
+            new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)),
+            new ARB().addComponents(new TIB().setCustomId('hook').setLabel('Webhook URL').setStyle(TIS.Short).setRequired(true)),
+            new ARB().addComponents(new TIB().setCustomId('b_style').setLabel('Cor do botão (Primary/Secondary/Success/Danger)').setStyle(TIS.Short).setRequired(false)),
+            new ARB().addComponents(new TIB().setCustomId('b_hex').setLabel('Hex do botão (opcional, ex: #ff0000)').setStyle(TIS.Short).setRequired(false))
+          );
           await i.showModal(modal);
-          try { const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id }); session.container.buttons = session.container.buttons||[]; const rawStyle = sub.fields.getTextInputValue('b_style') || 'Primary'; const bstyle = normalizeStyleInput(rawStyle) || 'Primary'; session.container.buttons.push({ type:'webhook', label: sub.fields.getTextInputValue('lbl'), hook: sub.fields.getTextInputValue('hook'), style: bstyle }); await sub.reply({ content:'Botão webhook adicionado.', ephemeral:true }); session.awaitingButtonType = false; await refresh(); } catch {}
+          try {
+            const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id });
+            session.container.buttons = session.container.buttons||[];
+            const rawStyle = sub.fields.getTextInputValue('b_style') || 'Primary';
+            const bstyle = normalizeStyleInput(rawStyle) || 'Primary';
+            const rawHex = sub.fields.getTextInputValue('b_hex') || null;
+            const hex = normalizeHexColor(rawHex);
+            session.container.buttons.push({ type:'webhook', label: sub.fields.getTextInputValue('lbl'), hook: sub.fields.getTextInputValue('hook'), style: bstyle, hex });
+            await sub.reply({ content:'Botão webhook adicionado.', ephemeral:true });
+            session.awaitingButtonType = false; await refresh();
+          } catch {}
           return;
         }
 
