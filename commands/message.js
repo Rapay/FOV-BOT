@@ -91,6 +91,7 @@ module.exports = {
           const extra = new ARB().addComponents(
             new BB().setCustomId(`uploaddm:${sid}`).setLabel('📤 Upload (DM)').setStyle(BStyle.Primary),
             new BB().setCustomId(`addbtn:${sid}`).setLabel('➕ Adicionar Botão').setStyle(BStyle.Secondary),
+            new BB().setCustomId(`managebtns:${sid}`).setLabel('🔧 Gerenciar Botões').setStyle(BStyle.Secondary),
             new BB().setCustomId(`done:${sid}`).setLabel('✅ Concluído').setStyle(BStyle.Success)
           );
           base.push(extra);
@@ -145,16 +146,67 @@ module.exports = {
           try {
             const user = interaction.user;
             const dm = await user.createDM();
-            await i.reply({ content: 'Abra DM e envie a imagem (60s).', ephemeral: true });
-            await dm.send('Envie a imagem que deseja usar (60s).');
+            await i.reply({ content: 'Abra DM e envie a imagem (60s) e clique em Confirmar upload quando pronto.', ephemeral: true });
+
+            // Send DM with a Confirm button so the user can explicitly confirm the upload
+            const confirmRow = new ARB().addComponents(new BB().setCustomId(`dm_confirm:${sid}`).setLabel('📤 Confirmar upload').setStyle(BStyle.Primary));
+            const dmMsg = await dm.send({ content: 'Envie abaixo a imagem que deseja usar. Quando terminar, clique em **Confirmar upload** (60s).', components: [confirmRow] });
+
+            // Look for any recent attachments first
             const recent = await dm.messages.fetch({ limit: 10 }).catch(()=>null);
             if (recent) {
               const found = recent.find(m => m.author.id === user.id && m.attachments && m.attachments.size>0);
-              if (found) { session.container.image = found.attachments.first().url; await dm.send('Imagem aplicada.'); await i.followUp({ content: 'Imagem aplicada.', ephemeral: true }); await refresh(); return; }
+              if (found) {
+                session.container.image = found.attachments.first().url;
+                try { await dm.send('Imagem aplicada automaticamente.'); } catch {}
+                try { await i.followUp({ content: 'Imagem aplicada automaticamente (anterior enviada).', ephemeral: true }); } catch {}
+                // disable confirm button
+                try { await dmMsg.edit({ components: [ new ARB().addComponents(new BB().setCustomId('dm_confirm_disabled').setLabel('✔️ Confirmado').setStyle(BStyle.Success).setDisabled(true)) ] }); } catch {}
+                await refresh();
+                return;
+              }
             }
+
+            // Collect messages with attachments
             const dcoll = dm.createMessageCollector({ filter: m => m.author.id === user.id && m.attachments && m.attachments.size>0, max:1, time:60*1000 });
-            dcoll.on('collect', async m => { session.container.image = m.attachments.first().url; try { await dm.send('Imagem recebida.'); } catch{}; try{ await i.followUp({ content: 'Imagem recebida e aplicada.', ephemeral: true }); } catch{}; await refresh(); });
+            dcoll.on('collect', async m => {
+              session.container.image = m.attachments.first().url;
+              try { await dm.send('Imagem recebida. Clique em Confirmar upload para aplicar.'); } catch {}
+              await refresh();
+            });
             dcoll.on('end', collected => { if (!collected || collected.size===0) try{ dm.send('Tempo esgotado: nenhuma imagem recebida.'); } catch{} });
+
+            // Collector for the confirm button in DM
+            const compColl = dmMsg.createMessageComponentCollector({ filter: b => b.user.id === user.id, max:1, time:60*1000 });
+            compColl.on('collect', async btnI => {
+              try {
+                await btnI.deferUpdate();
+                // if we already have an attachment from the collector, use it
+                if (session.container.image) {
+                  try { await dm.send('Upload confirmado. Imagem aplicada.'); } catch {}
+                  try { await i.followUp({ content: 'Imagem aplicada.', ephemeral: true }); } catch {}
+                  try { await dmMsg.edit({ components: [ new ARB().addComponents(new BB().setCustomId('dm_confirm_disabled').setLabel('✔️ Confirmado').setStyle(BStyle.Success).setDisabled(true)) ] }); } catch {}
+                  await refresh();
+                  return;
+                }
+                // otherwise try to fetch recent messages again to find an attachment the user sent
+                const nowRecent = await dm.messages.fetch({ limit: 10 }).catch(()=>null);
+                if (nowRecent) {
+                  const found = nowRecent.find(m => m.author.id === user.id && m.attachments && m.attachments.size>0);
+                  if (found) {
+                    session.container.image = found.attachments.first().url;
+                    try { await dm.send('Upload confirmado. Imagem aplicada.'); } catch {}
+                    try { await i.followUp({ content: 'Imagem aplicada.', ephemeral: true }); } catch {}
+                    try { await dmMsg.edit({ components: [ new ARB().addComponents(new BB().setCustomId('dm_confirm_disabled').setLabel('✔️ Confirmado').setStyle(BStyle.Success).setDisabled(true)) ] }); } catch {}
+                    await refresh();
+                    return;
+                  }
+                }
+                try { await btnI.followUp({ content: 'Nenhuma imagem encontrada. Envie a imagem antes de confirmar.', ephemeral: true }); } catch {}
+              } catch (err) { console.error('dm confirm err', err); }
+            });
+            compColl.on('end', () => { try { dmMsg.edit({ components: [ new ARB().addComponents(new BB().setCustomId('dm_confirm_timeout').setLabel('Tempo esgotado').setStyle(BStyle.Secondary).setDisabled(true)) ] }); } catch {} });
+
           } catch (err) { console.error('DM upload error', err); return i.reply({ content: 'Não foi possível abrir DM.', ephemeral: true }); }
           return;
         }
@@ -167,6 +219,73 @@ module.exports = {
           session.awaitingButtonType = true;
           await refresh();
           return;
+        }
+
+        if (act === 'managebtns') {
+          if (!session.container || !session.container.buttons || session.container.buttons.length === 0) return i.reply({ content: 'Nenhum botão para gerenciar.', ephemeral: true });
+          try {
+            const { StringSelectMenuBuilder } = require('discord.js');
+            const options = session.container.buttons.map((b, idx) => ({ label: b.label || `btn${idx}`, value: String(idx), description: b.type === 'url' ? 'URL' : 'Webhook' }));
+            const sel = new StringSelectMenuBuilder().setCustomId(`manage_buttons_select:${sid}`).setPlaceholder('Selecione o botão para editar...').addOptions(options).setMinValues(1).setMaxValues(1);
+            const row = new ARB().addComponents(sel);
+            const replyMsg = await i.reply({ content: 'Escolha o botão a editar:', components: [row], ephemeral: true, fetchReply: true });
+
+            const selColl = replyMsg.createMessageComponentCollector({ filter: c => c.user.id === interaction.user.id, max: 1, time: 2*60*1000 });
+            selColl.on('collect', async selI => {
+              try {
+                await selI.deferUpdate();
+                const idx = Number(selI.values[0]);
+                const btn = session.container.buttons[idx];
+                const actionRow = new ARB().addComponents(
+                  new BB().setCustomId(`manage_edit:${sid}:${idx}`).setLabel('✏️ Editar').setStyle(BStyle.Primary),
+                  new BB().setCustomId(`manage_delete:${sid}:${idx}`).setLabel('🗑️ Remover').setStyle(BStyle.Danger)
+                );
+                const follow = await selI.followUp({ content: `Botão selecionado: ${btn.label||idx}`, components: [actionRow], ephemeral: true, fetchReply: true });
+                const actColl = follow.createMessageComponentCollector({ filter: c2 => c2.user.id === interaction.user.id, max:1, time: 2*60*1000 });
+                actColl.on('collect', async ai => {
+                  const parts = ai.customId.split(':');
+                  const subact = parts[0];
+                  const bIdx = Number(parts[2]);
+                  if (subact === 'manage_delete') {
+                    session.container.buttons.splice(bIdx,1);
+                    try { await ai.update({ content: 'Botão removido.', components: [] }); } catch {}
+                    await refresh();
+                    return;
+                  }
+                  if (subact === 'manage_edit') {
+                    const targetBtn = session.container.buttons[bIdx];
+                    if (!targetBtn) return ai.reply({ content: 'Botão inexistente.', ephemeral: true });
+                    if (targetBtn.type === 'url') {
+                      const modal = new MB().setCustomId(`modal_edit_url:${sid}:${bIdx}`).setTitle('Editar Botão URL');
+                      modal.addComponents(new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)), new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true)));
+                      await ai.showModal(modal);
+                      try {
+                        const res = await ai.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id === interaction.user.id });
+                        targetBtn.label = res.fields.getTextInputValue('lbl');
+                        targetBtn.url = res.fields.getTextInputValue('url');
+                        await res.reply({ content: 'Botão atualizado.', ephemeral: true });
+                        await refresh();
+                      } catch {}
+                    } else if (targetBtn.type === 'webhook') {
+                      const modal = new MB().setCustomId(`modal_edit_hook:${sid}:${bIdx}`).setTitle('Editar Botão Webhook');
+                      modal.addComponents(new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)), new ARB().addComponents(new TIB().setCustomId('hook').setLabel('Webhook URL').setStyle(TIS.Short).setRequired(true)), new ARB().addComponents(new TIB().setCustomId('b_style').setLabel('Cor do botão (Primary/Secondary/Success/Danger)').setStyle(TIS.Short).setRequired(false)));
+                      await ai.showModal(modal);
+                      try {
+                        const res = await ai.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id === interaction.user.id });
+                        targetBtn.label = res.fields.getTextInputValue('lbl');
+                        targetBtn.hook = res.fields.getTextInputValue('hook');
+                        const raw = res.fields.getTextInputValue('b_style') || 'Primary';
+                        targetBtn.style = normalizeStyleInput(raw) || 'Primary';
+                        await res.reply({ content: 'Botão atualizado.', ephemeral: true });
+                        await refresh();
+                      } catch {}
+                    }
+                  }
+                });
+              } catch (err) { console.error('selColl collect err', err); }
+            });
+            return;
+          } catch (err) { console.error('managebtns err', err); return i.reply({ content: 'Erro ao abrir gerenciador.', ephemeral: true }); }
         }
 
         if (act === 'btn_url') {
