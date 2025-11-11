@@ -89,6 +89,7 @@ module.exports = {
   const panel = await interaction.reply({ embeds: [panelE], components: controls(sid), fetchReply: true, ephemeral: true });
 
     const refresh = async () => {
+      console.log(`[message] refresh called for session ${sid} (container=${!!session.container})`);
       const e = new EB();
       if (!session.container) e.setTitle('Sem conteúdo').setDescription('Clique em ➕ Adicionar');
       else {
@@ -123,7 +124,17 @@ module.exports = {
           );
           base.push(choiceRow);
         }
-        await panel.edit({ embeds: [e], components: base });
+        try {
+          // Prefer editing the original interaction reply (works reliably for ephemeral replies)
+          if (interaction && typeof interaction.editReply === 'function') {
+            await interaction.editReply({ embeds: [e], components: base });
+          } else {
+            await panel.edit({ embeds: [e], components: base });
+          }
+        } catch (err) {
+          console.error('[message] failed to update panel via editReply/panel.edit', err);
+          try { await interaction.followUp({ content: 'Falha ao atualizar o painel (verifique logs).', ephemeral: true }); } catch {}
+        }
       } catch {}
     };
 
@@ -598,6 +609,6 @@ module.exports = {
         await i.reply({ content:'Ação desconhecida.', ephemeral:true });
       } catch (err) { console.error('collector', err); }
     });
-    coll.on('end', ()=>{ try { panel.edit({ content:'Sessão encerrada.', embeds:[], components:[] }); } catch {} });
+  coll.on('end', async ()=>{ try { if (interaction && typeof interaction.editReply === 'function') await interaction.editReply({ content:'Sessão encerrada.', embeds:[], components:[] }); else await panel.edit({ content:'Sessão encerrada.', embeds:[], components:[] }); } catch (err) { console.error('collector end edit failed', err); } });
   }
 };
