@@ -327,50 +327,88 @@ module.exports = {
         }
 
         if (act === 'btn_url') {
-          const modal = new MB().setCustomId(`modal_btn_url:${sid}`).setTitle('Botão URL');
-          modal.addComponents(
-            new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)),
-            new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true)),
-            new ARB().addComponents(new TIB().setCustomId('b_hex').setLabel('Hex do botão (opcional, ex: #ff0000)').setStyle(TIS.Short).setRequired(false))
+          // Ask user to choose a style first via ephemeral buttons, then open modal to collect label/url/hex
+          try { await i.deferUpdate(); } catch {}
+          const styleRow = new ARB().addComponents(
+            new BB().setCustomId(`btn_url_style:${sid}:primary`).setLabel('Primary').setStyle(BStyle.Primary),
+            new BB().setCustomId(`btn_url_style:${sid}:secondary`).setLabel('Secondary').setStyle(BStyle.Secondary),
+            new BB().setCustomId(`btn_url_style:${sid}:success`).setLabel('Success').setStyle(BStyle.Success),
+            new BB().setCustomId(`btn_url_style:${sid}:danger`).setLabel('Danger').setStyle(BStyle.Danger),
+            new BB().setCustomId(`btn_url_style:${sid}:link`).setLabel('Link').setStyle(BStyle.Link)
           );
-          await i.showModal(modal);
-          try {
-            const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id });
-            session.container.buttons = session.container.buttons||[];
-            const rawHex = sub.fields.getTextInputValue('b_hex') || null;
-            const hex = normalizeHexColor(rawHex);
-            session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url'), style: 'link', hex });
-            // if user provided a hex for the button, apply it to the embed color as well (same UX as embed color)
-            if (hex) session.container.color = hex;
-            await sub.reply({ content:'Botão URL adicionado.', ephemeral:true });
-            await refresh();
-          } catch {}
+          const replyMsg = await i.followUp({ content: 'Escolha o estilo do botão (Link ignora cor):', components: [styleRow], ephemeral: true, fetchReply: true });
+          const selColl = replyMsg.createMessageComponentCollector({ filter: b => b.user.id === interaction.user.id, max:1, time:2*60*1000 });
+          selColl.on('collect', async selI => {
+            try {
+              await selI.deferUpdate();
+              const parts = selI.customId.split(':');
+              const chosen = parts[2] || 'primary';
+              // open modal to collect label/url/hex
+              const modal = new MB().setCustomId(`modal_btn_url:${sid}`).setTitle('Botão URL');
+              modal.addComponents(
+                new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)),
+                new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true)),
+                new ARB().addComponents(new TIB().setCustomId('b_hex').setLabel('Hex do botão (opcional, ex: #ff0000)').setStyle(TIS.Short).setRequired(false))
+              );
+              await selI.showModal(modal);
+              try {
+                const sub = await selI.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id });
+                session.container.buttons = session.container.buttons||[];
+                const rawHex = sub.fields.getTextInputValue('b_hex') || null;
+                const hex = normalizeHexColor(rawHex);
+                const styleName = (chosen === 'link') ? 'Link' : (chosen.charAt(0).toUpperCase() + chosen.slice(1));
+                session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url'), style: styleName, hex });
+                if (hex) session.container.color = hex;
+                await sub.reply({ content:'Botão URL adicionado.', ephemeral:true });
+                await refresh();
+              } catch {}
+            } catch (err) { console.error('btn_url style select err', err); }
+          });
           session.awaitingButtonType = false;
           return;
         }
 
         if (act === 'btn_hook') {
-          const modal = new MB().setCustomId(`modal_btn_hook:${sid}`).setTitle('Botão Webhook');
-          modal.addComponents(
-            new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)),
-            new ARB().addComponents(new TIB().setCustomId('hook').setLabel('Webhook URL').setStyle(TIS.Short).setRequired(true)),
-            new ARB().addComponents(new TIB().setCustomId('b_style').setLabel('Cor do botão (Primary/Secondary/Success/Danger)').setStyle(TIS.Short).setRequired(false)),
-            new ARB().addComponents(new TIB().setCustomId('b_hex').setLabel('Hex do botão (opcional, ex: #ff0000)').setStyle(TIS.Short).setRequired(false))
+          try { await i.deferUpdate(); } catch {}
+          const styleRow = new ARB().addComponents(
+            new BB().setCustomId(`btn_hook_style:${sid}:primary`).setLabel('Primary').setStyle(BStyle.Primary),
+            new BB().setCustomId(`btn_hook_style:${sid}:secondary`).setLabel('Secondary').setStyle(BStyle.Secondary),
+            new BB().setCustomId(`btn_hook_style:${sid}:success`).setLabel('Success').setStyle(BStyle.Success),
+            new BB().setCustomId(`btn_hook_style:${sid}:danger`).setLabel('Danger').setStyle(BStyle.Danger),
+            new BB().setCustomId(`btn_hook_style:${sid}:link`).setLabel('Link').setStyle(BStyle.Link)
           );
-          await i.showModal(modal);
-          try {
-            const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id });
-            session.container.buttons = session.container.buttons||[];
-            const rawStyle = sub.fields.getTextInputValue('b_style') || 'Primary';
-            const bstyle = normalizeStyleInput(rawStyle) || 'Primary';
-            const rawHex = sub.fields.getTextInputValue('b_hex') || null;
-            const hex = normalizeHexColor(rawHex);
-            session.container.buttons.push({ type:'webhook', label: sub.fields.getTextInputValue('lbl'), hook: sub.fields.getTextInputValue('hook'), style: bstyle, hex });
-            // apply the hex to the embed color for parity with embed color field
-            if (hex) session.container.color = hex;
-            await sub.reply({ content:'Botão webhook adicionado.', ephemeral:true });
-            session.awaitingButtonType = false; await refresh();
-          } catch {}
+          const replyMsg = await i.followUp({ content: 'Escolha o estilo do botão:', components: [styleRow], ephemeral: true, fetchReply: true });
+          const selColl = replyMsg.createMessageComponentCollector({ filter: b => b.user.id === interaction.user.id, max:1, time:2*60*1000 });
+          selColl.on('collect', async selI => {
+            try {
+              await selI.deferUpdate();
+              const parts = selI.customId.split(':');
+              const chosen = parts[2] || 'primary';
+              const modal = new MB().setCustomId(`modal_btn_hook:${sid}`).setTitle('Botão Webhook');
+              modal.addComponents(
+                new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)),
+                new ARB().addComponents(new TIB().setCustomId('hook').setLabel('Webhook URL').setStyle(TIS.Short).setRequired(true)),
+                new ARB().addComponents(new TIB().setCustomId('b_style').setLabel('Cor do botão (opcional)').setStyle(TIS.Short).setRequired(false)),
+                new ARB().addComponents(new TIB().setCustomId('b_hex').setLabel('Hex do botão (opcional, ex: #ff0000)').setStyle(TIS.Short).setRequired(false))
+              );
+              await selI.showModal(modal);
+              try {
+                const sub = await selI.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id });
+                session.container.buttons = session.container.buttons||[];
+                const rawStyle = sub.fields.getTextInputValue('b_style') || null;
+                const userStyle = rawStyle ? normalizeStyleInput(rawStyle) : null;
+                const chosenStyle = userStyle || (chosen.charAt(0).toUpperCase() + chosen.slice(1));
+                const bstyle = normalizeStyleInput(chosenStyle) || 'Primary';
+                const rawHex = sub.fields.getTextInputValue('b_hex') || null;
+                const hex = normalizeHexColor(rawHex);
+                session.container.buttons.push({ type:'webhook', label: sub.fields.getTextInputValue('lbl'), hook: sub.fields.getTextInputValue('hook'), style: bstyle, hex });
+                // apply hex to embed color as before
+                if (hex) session.container.color = hex;
+                await sub.reply({ content:'Botão webhook adicionado.', ephemeral:true });
+                session.awaitingButtonType = false; await refresh();
+              } catch {}
+            } catch (err) { console.error('btn_hook style select err', err); }
+          });
           return;
         }
 
