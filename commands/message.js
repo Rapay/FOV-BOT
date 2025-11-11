@@ -109,7 +109,6 @@ module.exports = {
           if (session.container) {
           const extra = new ARB().addComponents(
             new BB().setCustomId(`uploaddm:${sid}`).setLabel('📤 Upload (DM)').setStyle(BStyle.Primary),
-            new BB().setCustomId(`applydm:${sid}`).setLabel('📥 Usar última DM').setStyle(BStyle.Secondary),
             new BB().setCustomId(`addbtn:${sid}`).setLabel('➕ Adicionar Botão').setStyle(BStyle.Secondary),
             new BB().setCustomId(`managebtns:${sid}`).setLabel('🔧 Gerenciar Botões').setStyle(BStyle.Secondary),
             new BB().setCustomId(`done:${sid}`).setLabel('✅ Concluído').setStyle(BStyle.Success)
@@ -204,7 +203,6 @@ module.exports = {
 
             // Always require a NEW upload: clear any previous pendingImage and do NOT inspect older DM messages.
             session.pendingImage = null;
-            try { await dm.send('Aguardando nova imagem. Envie a imagem que deseja usar e então clique em **Confirmar upload**.'); } catch {}
 
             // Collect messages with attachments (wait for user to upload a NEW image). No timeout — user will confirm or cancel.
             const imgUrlRegex = /(https?:\/\/.+\.(?:png|jpe?g|gif|webp))(?:\?.*)?$/i;
@@ -264,6 +262,36 @@ module.exports = {
                     await refresh();
                     return;
                   } else {
+                    // fallback: try to fetch recent messages from the DM channel to find a recently sent image
+                    try {
+                      const chan = btnI.channel;
+                      if (chan && chan.messages && typeof chan.messages.fetch === 'function') {
+                        const recent = await chan.messages.fetch({ limit: 30 });
+                        // iterate in chronological order (newest first)
+                        let found = null;
+                        for (const m of recent.values()) {
+                          if (m.author && m.author.id !== user.id) continue;
+                          if (m.attachments && m.attachments.size>0) { found = m.attachments.first().url; break; }
+                          if (m.embeds && m.embeds.length>0) {
+                            const e = m.embeds.find(e2 => (e2.type === 'gifv' || e2.type === 'image' || !!(e2.image && e2.image.url) || !!(e2.thumbnail && e2.thumbnail.url) || !!e2.url));
+                            if (e) { found = e.image?.url || e.thumbnail?.url || e.url || null; if (found) break; }
+                          }
+                          const imgMatch = (m.content || '').trim().match(/(https?:\/\/.+\.(?:png|jpe?g|gif|webp))(?:\?.*)?$/i);
+                          if (imgMatch) { found = imgMatch[1]; break; }
+                        }
+                        if (found) {
+                          console.log(`[message] found recent DM image for session ${sid}: ${found}`);
+                          session.container.image = found;
+                          try { await dm.send('Upload confirmado (via fallback). Imagem aplicada.'); } catch {}
+                          try { await i.followUp({ content: 'Imagem aplicada (via fallback).', ephemeral: true }); } catch {}
+                          try { await dmMsg.edit({ components: [ new ARB().addComponents(new BB().setCustomId('dm_confirm_disabled').setLabel('✔️ Confirmado').setStyle(BStyle.Success).setDisabled(true), new BB().setCustomId('dm_cancel_disabled').setLabel('Cancelado').setStyle(BStyle.Secondary).setDisabled(true)) ] }); } catch {}
+                          try { dcoll.stop(); } catch {}
+                          try { compColl.stop(); } catch {}
+                          await refresh();
+                          return;
+                        }
+                      }
+                    } catch (err) { console.error('confirm fallback fetch err', err); }
                     try { await btnI.followUp({ content: 'Nenhuma imagem nova encontrada. Envie a imagem na DM antes de confirmar.', ephemeral: true }); } catch {}
                     return;
                   }
@@ -285,32 +313,7 @@ module.exports = {
           } catch (err) { console.error('DM upload error', err); return i.reply({ content: 'Não foi possível abrir DM.', ephemeral: true }); }
           return;
         }
-        if (act === 'applydm') {
-          // Try to fetch the user's DM and use the last image attachment/embed found
-          try {
-            const user = interaction.user;
-            console.log(`[message] applydm requested by ${user.id} for session ${sid}`);
-            const dm = await user.createDM();
-            const msgs = await dm.messages.fetch({ limit: 30 });
-            let foundUrl = null;
-            for (const m of msgs.values()) {
-              if (m.author && m.author.id !== user.id) continue;
-              if (m.attachments && m.attachments.size>0) { foundUrl = m.attachments.first().url; break; }
-              if (m.embeds && m.embeds.length>0) {
-                const e = m.embeds.find(e2 => (e2.type === 'gifv' || e2.type === 'image' || !!(e2.image && e2.image.url) || !!(e2.thumbnail && e2.thumbnail.url) || !!e2.url));
-                if (e) { foundUrl = e.image?.url || e.thumbnail?.url || e.url || null; if (foundUrl) break; }
-              }
-              // check for plain image links
-              const imgMatch = (m.content || '').trim().match(/(https?:\/\/.+\.(?:png|jpe?g|gif|webp))(?:\?.*)?$/i);
-              if (imgMatch) { foundUrl = imgMatch[1]; break; }
-            }
-            if (!foundUrl) return i.reply({ content: 'Nenhuma imagem encontrada nas suas DMs (últimas 30 mensagens).', ephemeral: true });
-            session.container.image = foundUrl;
-            await i.reply({ content: 'Imagem aplicada a partir da sua última DM.', ephemeral: true });
-            await refresh();
-          } catch (err) { console.error('applydm err', err); try { await i.reply({ content: 'Erro ao buscar nas suas DMs.', ephemeral: true }); } catch {} }
-          return;
-        }
+        
         if (act === 'addbtn') {
           if (!session.container) return i.reply({ content: 'Crie o container primeiro.', ephemeral: true });
           // Mark that we're awaiting a button-type selection and refresh the panel so the main collector will capture the choice
