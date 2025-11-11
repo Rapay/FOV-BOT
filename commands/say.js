@@ -198,18 +198,29 @@ module.exports = {
         const allowedMentions = roleIdsSelected && roleIdsSelected.length > 0 ? { roles: roleIdsSelected } : { parse: ['users', 'roles', 'everyone'] };
         await target.send({ content: p, allowedMentions });
       }
-      // NOTE: If the bot cannot use certain custom emojis inline (because it doesn't have access),
-      // we avoid automatically posting them as separate GIF/image messages (that looked like GIFs).
-      // Instead notify the user which emojis couldn't be used inline and how to fix it.
-      let replyText = `Mensagem enviada em ${target}${parts.length > 1 ? ` (dividida em ${parts.length} partes)` : ''}`;
-      if (missingEmojiImages.length > 0) {
-        const idsList = missingEmojiImages.map(m => `${m.id}${m.animated ? ' (animado)' : ''}`).join(', ');
-        const urls = missingEmojiImages.map(m => `https://cdn.discordapp.com/emojis/${m.id}.${m.animated ? 'gif' : 'png'}`).join('\n');
-        replyText += `\n\nAtenção: os seguintes emojis não puderam ser usados inline porque o bot não tem acesso a eles: ${idsList}.\n` +
-          'Para que apareçam inline (como se quem enviou tivesse Nitro), o bot precisa ter acesso ao emoji — por exemplo, adicionando o bot ao servidor onde o emoji existe, ou usando um emoji que já exista no servidor alvo.\n' +
-          'Enquanto isso, você pode recriar esses emojis no servidor alvo ou permitir que o bot seja adicionado ao servidor de origem. URLs dos emojis (para referência):\n' + urls;
+      // If the bot cannot use certain custom emojis inline, send those emojis as image embeds
+      // (this reproduces the previous behavior where animated emojis become GIF attachments).
+      for (const me of missingEmojiImages) {
+        try {
+          const url = `https://cdn.discordapp.com/emojis/${me.id}.${me.animated ? 'gif' : 'png'}`;
+          const emb = new EmbedBuilder().setImage(url);
+          await target.send({ embeds: [emb] });
+        } catch (e) { console.error('Erro ao enviar emoji como imagem', e); }
       }
-      return interaction.reply({ content: replyText, ephemeral: true });
+
+      const replyText = `Mensagem enviada em ${target}${parts.length > 1 ? ` (dividida em ${parts.length} partes)` : ''}`;
+      try {
+        if (!interaction.replied) {
+          return await interaction.reply({ content: replyText, ephemeral: true });
+        } else {
+          return await interaction.followUp({ content: replyText, ephemeral: true });
+        }
+      } catch (e) {
+        console.error('Erro ao responder interação /say:', e);
+        // as a last resort, try to send DM to user
+        try { await interaction.user.send({ content: replyText }); } catch (ee) { /* ignore */ }
+        return;
+      }
     } catch (err) {
       console.error('Erro em /say:', err);
       return interaction.reply({ content: 'Falha ao enviar a mensagem (verifique permissões do bot).', ephemeral: true });
