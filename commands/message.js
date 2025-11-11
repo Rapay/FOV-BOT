@@ -654,9 +654,18 @@ module.exports = {
                       const btnIdx = Number(comp.customId.split(':')[1]);
                       const finalId = `message_button_webhook:${sent.id}:${btnIdx}`;
                       const nb = BB.from(comp).setCustomId(finalId);
-                      // persist mapping
-                      const hookInfo = c.buttons[btnIdx];
-                      if (hookInfo && hookInfo.hook) saveHook(`${sent.id}:${btnIdx}`, hookInfo.hook);
+                      // persist mapping for webhook or url-proxy
+                      const btnInfo = c.buttons[btnIdx];
+                      try {
+                        if (btnInfo) {
+                          if (btnInfo.type === 'webhook' && btnInfo.hook) {
+                            saveHook(`${sent.id}:${btnIdx}`, btnInfo.hook);
+                          } else if (btnInfo.type === 'url' && btnInfo.url) {
+                            // store as an object to indicate this is a url-proxy mapping
+                            saveHook(`${sent.id}:${btnIdx}`, { type: 'url_proxy', url: btnInfo.url });
+                          }
+                        }
+                      } catch (e) { console.error('saveHook mapping error', e); }
                       return nb;
                     }
                     return comp;

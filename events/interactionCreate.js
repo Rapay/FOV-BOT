@@ -136,28 +136,43 @@ module.exports = {
           const sessionKey = `${parts[1]}:${parts[2]}`;
           const hooks = client.messageButtonHooks;
           if (!hooks || !hooks.has(sessionKey)) return interaction.reply({ content: 'Ação não configurada ou expirada.', ephemeral: true });
-          const webhookUrl = hooks.get(sessionKey);
-          if (!webhookUrl) return interaction.reply({ content: 'Webhook inválido.', ephemeral: true });
+          const stored = hooks.get(sessionKey);
+          if (!stored) return interaction.reply({ content: 'Ação inválida.', ephemeral: true });
 
-          // perform a POST to the webhook URL with a simple JSON payload
-          try {
-            const { URL } = require('url');
-            const https = require('https');
-            const parsed = new URL(webhookUrl);
-            const payload = JSON.stringify({ userId: interaction.user.id, userTag: interaction.user.tag, messageId: interaction.message.id, channelId: interaction.channelId, guildId: interaction.guildId });
-            const options = { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } };
-            const req = https.request(parsed, options, res => {
-              // ignore response body
-            });
-            req.on('error', e => { console.error('Erro ao chamar webhook:', e); });
-            req.write(payload);
-            req.end();
-          } catch (err) {
-            console.error('Erro ao executar webhook:', err);
-            return interaction.reply({ content: 'Falha ao executar a ação do webhook.', ephemeral: true });
+          // If stored is a string, treat it as a webhook URL (legacy)
+          if (typeof stored === 'string') {
+            try {
+              const { URL } = require('url');
+              const https = require('https');
+              const parsed = new URL(stored);
+              const payload = JSON.stringify({ userId: interaction.user.id, userTag: interaction.user.tag, messageId: interaction.message.id, channelId: interaction.channelId, guildId: interaction.guildId });
+              const options = { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } };
+              const req = https.request(parsed, options, res => {
+                // ignore response body
+              });
+              req.on('error', e => { console.error('Erro ao chamar webhook:', e); });
+              req.write(payload);
+              req.end();
+            } catch (err) {
+              console.error('Erro ao executar webhook:', err);
+              return interaction.reply({ content: 'Falha ao executar a ação do webhook.', ephemeral: true });
+            }
+            return interaction.reply({ content: 'Ação executada (webhook acionado).', ephemeral: true });
           }
 
-          return interaction.reply({ content: 'Ação executada (webhook acionado).', ephemeral: true });
+          // If stored is an object indicating a url_proxy, reply ephemeral with a Link button
+          if (stored && stored.type === 'url_proxy' && stored.url) {
+            try {
+              const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+              const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Abrir link').setStyle(ButtonStyle.Link).setURL(stored.url));
+              return interaction.reply({ content: 'Clique para abrir o link:', components: [row], ephemeral: true });
+            } catch (err) {
+              console.error('Erro ao criar resposta de url_proxy:', err);
+              return interaction.reply({ content: 'Falha ao abrir link.', ephemeral: true });
+            }
+          }
+
+          return interaction.reply({ content: 'Ação não suportada.', ephemeral: true });
         } catch (err) {
           console.error('Erro ao processar message_button_webhook:', err);
           if (!interaction.replied) await interaction.reply({ content: 'Erro ao processar ação.', ephemeral: true });
