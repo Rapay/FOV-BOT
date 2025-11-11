@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, RoleSelectMenuBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, RoleSelectMenuBuilder, StringSelectMenuBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -91,17 +91,19 @@ module.exports = {
         await submitted.reply({ content: 'Recebido — enviando...', ephemeral: true });
       }
 
-      // If user included {emoji} placeholders, prompt for emoji inputs (one per line)
+      // If user included {emoji} placeholders, offer a select of bot-accessible emojis and a manual paste fallback
       const emojiPlaceholders = (content.match(/\{emoji\}/gi) || []).length;
       if (emojiPlaceholders > 0) {
-        const btnRow = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`say_fill_emoji:${sid}`).setLabel('Preencher emojis').setStyle(ButtonStyle.Primary)
-        );
-        const prompt = await submitted.followUp({ content: `Encontrei ${emojiPlaceholders} placeholder(s) {emoji}. Clique em "Preencher emojis" e cole os emojis/IDs (um por linha) na ordem. Você pode usar <a:name:id> ou apenas o id.`, components: [btnRow], ephemeral: true, fetchReply: true });
+        // build select options from emojis the bot can access (limit to 25 options)
+        const allEmojis = Array.from(interaction.client.emojis.cache.values()).slice(0, 25);
+        const options = allEmojis.map(e => ({ label: e.name || e.id, value: e.id, description: `ID: ${e.id}`, emoji: { id: e.id, name: e.name, animated: e.animated } }));
+        const select = new StringSelectMenuBuilder().setCustomId(`say_emoji_select:${sid}`).setPlaceholder('Selecione emojis disponíveis...').addOptions(options).setMinValues(Math.min(emojiPlaceholders, options.length)).setMaxValues(Math.min(emojiPlaceholders, options.length));
+        const manualBtn = new ButtonBuilder().setCustomId(`say_fill_emoji:${sid}`).setLabel('Colar IDs/manual').setStyle(ButtonStyle.Secondary);
+        const prompt = await submitted.followUp({ content: `Encontrei ${emojiPlaceholders} placeholder(s) {emoji}. Selecione ${emojiPlaceholders} emoji(s) na lista OR clique em "Colar IDs/manual" para inserir markups/IDs manualmente.`, components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(manualBtn)], ephemeral: true, fetchReply: true });
 
         const coll = prompt.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id, max: 1, time: 5*60*1000 });
         const sel = await new Promise((resolve) => {
-          coll.on('collect', async selI => { try { await selI.deferUpdate(); } catch {} resolve(selI); });
+          coll.on('collect', async selI => { resolve(selI); });
           coll.on('end', collected => { if (!collected || collected.size === 0) resolve(null); });
         });
         if (!sel) {
@@ -109,42 +111,39 @@ module.exports = {
           content = content.replace(/\{emoji\}/gi, '');
         } else {
           try {
-            const modal2 = new ModalBuilder().setCustomId(`modal_say_emoji:${sid}`).setTitle('Forneça os emojis');
-            modal2.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('emoji_list').setLabel('Cole aqui os emojis (um por linha)').setStyle(TextInputStyle.Paragraph).setRequired(true).setPlaceholder('<a:seta:851206127471034378>\n851206127471034378')));
-            await sel.showModal(modal2);
-            const res = await sel.awaitModalSubmit({ time: 5*60*1000, filter: m => m.user.id === interaction.user.id });
-            const lines = (res.fields.getTextInputValue('emoji_list') || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-            const replacements = [];
-            for (const line of lines.slice(0, emojiPlaceholders)) {
-              const m = line.match(/<(a)?:[A-Za-z0-9_]+:(\d+)>/);
-              if (m) {
-                replacements.push({ markup: m[0], id: m[2], animated: !!m[1] });
-                continue;
-              }
-              const idm = line.match(/^(\d+)$/);
-              if (idm) {
-                // create a placeholder markup; name can be arbitrary
-                replacements.push({ markup: `<:e:${idm[1]}>`, id: idm[1], animated: false });
-                continue;
-              }
-              const any = line.match(/(\d{17,20})/);
-              if (any) {
-                replacements.push({ markup: `<:e:${any[1]}>`, id: any[1], animated: false });
-                continue;
-              }
+            if (sel.customId && sel.customId.startsWith('say_emoji_select:')) {
+              // user selected from the bot's emoji list
+              try { await sel.deferUpdate(); } catch {}
+              const chosen = sel.values || [];
+              let ri = 0;
+              content = content.replace(/\{emoji\}/gi, () => {
+                const id = chosen[ri++];
+                const em = interaction.client.emojis.cache.get(id);
+                if (em) return `${em.animated ? '<a:' : '<:'}${em.name}:${em.id}>`;
+                return '';
+              });
+              await submitted.followUp({ content: 'Emojis aplicados pelo seletor.', ephemeral: true });
+            } else if (sel.customId && sel.customId.startsWith('say_fill_emoji:')) {
+              // manual paste fallback (open modal)
+              try {
+                await sel.showModal(new ModalBuilder().setCustomId(`modal_say_emoji:${sid}`).setTitle('Forneça os emojis').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('emoji_list').setLabel('Cole aqui os emojis (um por linha)').setStyle(TextInputStyle.Paragraph).setRequired(true).setPlaceholder('<a:seta:851206127471034378>\n851206127471034378'))));
+                const res = await sel.awaitModalSubmit({ time: 5*60*1000, filter: m => m.user.id === interaction.user.id });
+                const lines = (res.fields.getTextInputValue('emoji_list') || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+                const replacements = [];
+                for (const line of lines.slice(0, emojiPlaceholders)) {
+                  const m = line.match(/<(a)?:[A-Za-z0-9_]+:(\d+)>/);
+                  if (m) { replacements.push({ markup: m[0], id: m[2], animated: !!m[1] }); continue; }
+                  const idm = line.match(/^(\d+)$/);
+                  if (idm) { replacements.push({ markup: `<:e:${idm[1]}>`, id: idm[1], animated: false }); continue; }
+                  const any = line.match(/(\d{17,20})/);
+                  if (any) { replacements.push({ markup: `<:e:${any[1]}>`, id: any[1], animated: false }); continue; }
+                }
+                let ri = 0;
+                content = content.replace(/\{emoji\}/gi, () => { const r = replacements[ri++]; return r ? r.markup : ''; });
+                await res.reply({ content: 'Emojis aplicados no texto.', ephemeral: true });
+              } catch (err) { console.error('emoji modal error', err); await submitted.followUp({ content: 'Erro ao processar emojis; placeholders removidos.', ephemeral: true }); content = content.replace(/\{emoji\}/gi, ''); }
             }
-            // sequentially replace placeholders
-            let ri = 0;
-            content = content.replace(/\{emoji\}/gi, () => {
-              const r = replacements[ri++];
-              return r ? r.markup : '';
-            });
-            await res.reply({ content: 'Emojis aplicados no texto.', ephemeral: true });
-          } catch (err) {
-            console.error('emoji modal error', err);
-            await submitted.followUp({ content: 'Erro ao processar emojis; placeholders removidos.', ephemeral: true });
-            content = content.replace(/\{emoji\}/gi, '');
-          }
+          } catch (err) { console.error('emoji selection error', err); await submitted.followUp({ content: 'Erro ao processar seleção de emojis; placeholders removidos.', ephemeral: true }); content = content.replace(/\{emoji\}/gi, ''); }
         }
       }
     } catch (err) {
