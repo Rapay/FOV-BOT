@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, RoleSelectMenuBuilder } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, RoleSelectMenuBuilder, EmbedBuilder } = require('discord.js');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -6,8 +6,7 @@ module.exports = {
     .setDescription('Faz o bot enviar texto cru (preserva marcação do Discord como spoilers, negrito, etc.)')
   .addStringOption(o => o.setName('content').setDescription('Texto a ser enviado pelo bot').setRequired(false))
   .addChannelOption(o => o.setName('channel').setDescription('Canal para enviar a mensagem (opcional)').setRequired(false))
-  .addBooleanOption(o => o.setName('ephemeral').setDescription('Responder ao autor de forma efêmera indicando envio?').setRequired(false))
-  .addRoleOption(o => o.setName('role').setDescription('Cargo para mencionar no início da mensagem (opcional)').setRequired(false)),
+  .addBooleanOption(o => o.setName('ephemeral').setDescription('Responder ao autor de forma efêmera indicando envio?').setRequired(false)),
 
   async execute(interaction) {
     // Restrict usage to staff: ManageMessages or Administrator
@@ -50,7 +49,9 @@ module.exports = {
     }
 
     // Always show a modal to collect the message content (so multi-line input is consistent)
-    let content = contentOpt;
+  let content = contentOpt;
+  // will store role IDs selected to replace {role} placeholders (keeps mention control)
+  let roleIdsSelected = null;
     const modal = new ModalBuilder().setCustomId('say_modal').setTitle('Conteúdo (multi-linha)');
     const input = new TextInputBuilder().setCustomId('say_content').setLabel('Mensagem').setStyle(TextInputStyle.Paragraph).setRequired(true).setPlaceholder('Escreva sua mensagem (linhas e mais de uma linha são suportadas)...');
     // If the user provided a content option, attempt to prefill the modal input when supported
@@ -78,10 +79,12 @@ module.exports = {
           coll.on('end', collected => { if (!collected || collected.size === 0) resolve(null); });
         });
         if (!sel) { await submitted.followUp({ content: 'Nenhum cargo selecionado — cancelando.', ephemeral: true }); return; }
-        const roleIds = sel.values || [];
-        // replace each {role} occurrence with corresponding selected role mention
-        let idx = 0;
-        content = content.replace(/\{role\}/gi, () => { const rid = roleIds[idx++] || ''; return rid ? `<@&${rid}>` : '{role}'; });
+  const roleIds = sel.values || [];
+  // store selected role IDs for allowedMentions later
+  roleIdsSelected = roleIds;
+  // replace each {role} occurrence with corresponding selected role mention
+  let idx = 0;
+  content = content.replace(/\{role\}/gi, () => { const rid = roleIds[idx++] || ''; return rid ? `<@&${rid}>` : '{role}'; });
         await submitted.followUp({ content: 'Cargos aplicados no texto. Enviando...', ephemeral: true });
       } else {
         await submitted.reply({ content: 'Recebido — enviando...', ephemeral: true });
@@ -93,18 +96,49 @@ module.exports = {
 
     if (!content || content.trim().length === 0) return interaction.reply({ content: 'Conteúdo vazio não permitido.', ephemeral: true });
 
+    // === handle custom emojis that the bot cannot use directly ===
+    // find all custom emoji markups like <:name:id> or <a:name:id>
+    const emojiRegex = /<(a)?:[A-Za-z0-9_]+:(\d+)>/g;
+    let emMatch;
+    const foundEmojis = new Map(); // id -> { animated }
+    while ((emMatch = emojiRegex.exec(content)) !== null) {
+      const animated = !!emMatch[1];
+      const id = emMatch[2];
+      if (!foundEmojis.has(id)) foundEmojis.set(id, { animated });
+    }
+
+    const missingEmojiImages = []; // array of {id, animated}
+    for (const [id, info] of foundEmojis.entries()) {
+      let accessible = false;
+      try {
+        const e = await interaction.client.emojis.fetch(id).catch(() => null);
+        if (e) accessible = true;
+      } catch (e) {
+        accessible = false;
+      }
+      if (!accessible) {
+        const markupRe = new RegExp(`<a?:[A-Za-z0-9_]+:${id}>`, 'g');
+        content = content.replace(markupRe, '');
+        missingEmojiImages.push({ id, animated: info.animated });
+      }
+    }
+
     try {
-      const roleOpt = interaction.options.getRole('role');
       const parts = splitMessage(content, 2000);
-      const allowedFirst = roleOpt ? { roles: [roleOpt.id], parse: ['users'] } : { parse: ['users', 'roles', 'everyone'] };
-      const allowedOther = roleOpt ? { roles: [], parse: ['users'] } : { parse: ['users', 'roles', 'everyone'] };
       for (let idx = 0; idx < parts.length; idx++) {
         const p = parts[idx];
-        const contentToSend = (idx === 0 && roleOpt) ? `<@&${roleOpt.id}> ${p}` : p;
-        const allowedMentions = (idx === 0) ? allowedFirst : allowedOther;
-        await target.send({ content: contentToSend, allowedMentions });
+        const allowedMentions = roleIdsSelected && roleIdsSelected.length > 0 ? { roles: roleIdsSelected } : { parse: ['users', 'roles', 'everyone'] };
+        await target.send({ content: p, allowedMentions });
       }
-      const replyText = `Mensagem enviada em ${target}${parts.length > 1 ? ` (dividida em ${parts.length} partes)` : ''}${roleOpt ? ` (mencionando ${roleOpt.name})` : ''}`;
+      // send missing emoji images as embeds so the emoji appearance is preserved even if bot can't use inline emoji
+      for (const me of missingEmojiImages) {
+        try {
+          const url = `https://cdn.discordapp.com/emojis/${me.id}.${me.animated ? 'gif' : 'png'}`;
+          const emb = new EmbedBuilder().setImage(url);
+          await target.send({ embeds: [emb] });
+        } catch (e) { console.error('Erro ao enviar emoji como imagem', e); }
+      }
+      const replyText = `Mensagem enviada em ${target}${parts.length > 1 ? ` (dividida em ${parts.length} partes)` : ''}`;
       return interaction.reply({ content: replyText, ephemeral: true });
     } catch (err) {
       console.error('Erro em /say:', err);
