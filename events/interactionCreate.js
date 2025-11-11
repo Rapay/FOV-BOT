@@ -135,9 +135,15 @@ module.exports = {
           // customId format: message_button_webhook:<sessionId>:<buttonIdx>
           const sessionKey = `${parts[1]}:${parts[2]}`;
           const hooks = client.messageButtonHooks;
-          if (!hooks || !hooks.has(sessionKey)) return interaction.reply({ content: 'Ação não configurada ou expirada.', ephemeral: true });
+          console.log(`[message_button] clicked sessionKey=${sessionKey}`);
+          if (!hooks || !hooks.has(sessionKey)) {
+            console.log('[message_button] no hook mapping found for', sessionKey);
+            try { return await interaction.reply({ content: 'Ação não configurada ou expirada.', ephemeral: true }); } catch (e) { console.error('[message_button] reply failed', e); return; }
+          }
           const stored = hooks.get(sessionKey);
-          if (!stored) return interaction.reply({ content: 'Ação inválida.', ephemeral: true });
+          if (!stored) {
+            try { return await interaction.reply({ content: 'Ação inválida.', ephemeral: true }); } catch (e) { console.error('[message_button] reply failed', e); return; }
+          }
 
           // If stored is a string, treat it as a webhook URL (legacy)
           if (typeof stored === 'string') {
@@ -155,27 +161,28 @@ module.exports = {
               req.end();
             } catch (err) {
               console.error('Erro ao executar webhook:', err);
-              return interaction.reply({ content: 'Falha ao executar a ação do webhook.', ephemeral: true });
+              try { return await interaction.reply({ content: 'Falha ao executar a ação do webhook.', ephemeral: true }); } catch (e) { console.error('[message_button] reply failed', e); }
             }
-            return interaction.reply({ content: 'Ação executada (webhook acionado).', ephemeral: true });
+            try { return await interaction.reply({ content: 'Ação executada (webhook acionado).', ephemeral: true }); } catch (e) { console.error('[message_button] reply failed', e); }
           }
 
           // If stored is an object indicating a url_proxy, reply ephemeral with a Link button
           if (stored && stored.type === 'url_proxy' && stored.url) {
             try {
+              console.log('[message_button] url_proxy click, sending ephemeral link');
               const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
               const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Abrir link').setStyle(ButtonStyle.Link).setURL(stored.url));
-              return interaction.reply({ content: 'Clique para abrir o link:', components: [row], ephemeral: true });
+              try { return await interaction.reply({ content: 'Clique para abrir o link:', components: [row], ephemeral: true }); } catch (e) { console.error('[message_button] reply failed', e); try { return await interaction.followUp({ content: 'Clique para abrir o link:', components: [row], ephemeral: true }); } catch (ee) { console.error('[message_button] followUp failed', ee); } }
             } catch (err) {
               console.error('Erro ao criar resposta de url_proxy:', err);
-              return interaction.reply({ content: 'Falha ao abrir link.', ephemeral: true });
+              try { return await interaction.reply({ content: 'Falha ao abrir link.', ephemeral: true }); } catch (e) { console.error('[message_button] reply failed', e); }
             }
           }
 
-          return interaction.reply({ content: 'Ação não suportada.', ephemeral: true });
+          try { return await interaction.reply({ content: 'Ação não suportada.', ephemeral: true }); } catch (e) { console.error('[message_button] reply failed', e); }
         } catch (err) {
           console.error('Erro ao processar message_button_webhook:', err);
-          if (!interaction.replied) await interaction.reply({ content: 'Erro ao processar ação.', ephemeral: true });
+          if (!interaction.replied) try { await interaction.reply({ content: 'Erro ao processar ação.', ephemeral: true }); } catch (e) { console.error('[message_button] final reply failed', e); }
         }
         return;
       }
