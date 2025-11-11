@@ -115,6 +115,17 @@ module.exports = {
               // user selected from the bot's emoji list
               try { await sel.deferUpdate(); } catch {}
               const chosen = sel.values || [];
+              // Debug logging: show which emoji ids were chosen and whether the bot has them cached/fetchable
+              try {
+                console.log('[say] emoji selector chosen ids:', chosen);
+                for (const id of chosen) {
+                  const inCache = interaction.client.emojis.cache.has(id);
+                  const cached = interaction.client.emojis.cache.get(id);
+                  let fetched = null;
+                  try { fetched = await interaction.client.emojis.fetch(id).catch(() => null); } catch (e) { fetched = null; }
+                  console.log(`[say] emoji id=${id} inCache=${inCache} cacheGuild=${cached ? cached.guildId : 'n/a'} fetched=${fetched ? 'yes' : 'no'}`);
+                }
+              } catch (logErr) { console.error('[say] error logging emoji selection', logErr); }
               let ri = 0;
               content = content.replace(/\{emoji\}/gi, () => {
                 const id = chosen[ri++];
@@ -187,15 +198,17 @@ module.exports = {
         const allowedMentions = roleIdsSelected && roleIdsSelected.length > 0 ? { roles: roleIdsSelected } : { parse: ['users', 'roles', 'everyone'] };
         await target.send({ content: p, allowedMentions });
       }
-      // send missing emoji images as embeds so the emoji appearance is preserved even if bot can't use inline emoji
-      for (const me of missingEmojiImages) {
-        try {
-          const url = `https://cdn.discordapp.com/emojis/${me.id}.${me.animated ? 'gif' : 'png'}`;
-          const emb = new EmbedBuilder().setImage(url);
-          await target.send({ embeds: [emb] });
-        } catch (e) { console.error('Erro ao enviar emoji como imagem', e); }
+      // NOTE: If the bot cannot use certain custom emojis inline (because it doesn't have access),
+      // we avoid automatically posting them as separate GIF/image messages (that looked like GIFs).
+      // Instead notify the user which emojis couldn't be used inline and how to fix it.
+      let replyText = `Mensagem enviada em ${target}${parts.length > 1 ? ` (dividida em ${parts.length} partes)` : ''}`;
+      if (missingEmojiImages.length > 0) {
+        const idsList = missingEmojiImages.map(m => `${m.id}${m.animated ? ' (animado)' : ''}`).join(', ');
+        const urls = missingEmojiImages.map(m => `https://cdn.discordapp.com/emojis/${m.id}.${m.animated ? 'gif' : 'png'}`).join('\n');
+        replyText += `\n\nAtenção: os seguintes emojis não puderam ser usados inline porque o bot não tem acesso a eles: ${idsList}.\n` +
+          'Para que apareçam inline (como se quem enviou tivesse Nitro), o bot precisa ter acesso ao emoji — por exemplo, adicionando o bot ao servidor onde o emoji existe, ou usando um emoji que já exista no servidor alvo.\n' +
+          'Enquanto isso, você pode recriar esses emojis no servidor alvo ou permitir que o bot seja adicionado ao servidor de origem. URLs dos emojis (para referência):\n' + urls;
       }
-      const replyText = `Mensagem enviada em ${target}${parts.length > 1 ? ` (dividida em ${parts.length} partes)` : ''}`;
       return interaction.reply({ content: replyText, ephemeral: true });
     } catch (err) {
       console.error('Erro em /say:', err);
