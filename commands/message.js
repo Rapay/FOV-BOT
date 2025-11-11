@@ -163,15 +163,32 @@ module.exports = {
           if (!session.container) return i.reply({ content: 'Crie o container primeiro.', ephemeral: true });
           try {
             const user = interaction.user;
-            const dm = await user.createDM();
-            await i.reply({ content: 'Abra DM e envie a imagem (60s) e clique em Confirmar upload quando pronto.', ephemeral: true });
+            console.log(`[message] uploaddm requested by ${user.id} for session ${sid}`);
+            // Inform the panel user that we're attempting to open a DM
+            try { await i.reply({ content: 'Tentando abrir DM para upload. Se suas DMs estiverem bloqueadas, o bot não conseguirá enviar.', ephemeral: true }); } catch {}
+            let dm;
+            try {
+              dm = await user.createDM();
+            } catch (err) {
+              console.error('[message] createDM failed', err);
+              try { await i.followUp({ content: 'Não foi possível abrir DM — verifique suas configurações de privacidade.', ephemeral: true }); } catch {}
+              return;
+            }
 
             // Send DM with Confirm and Cancel buttons so the user can confirm or abort the upload
             const confirmRow = new ARB().addComponents(
               new BB().setCustomId(`dm_confirm:${sid}`).setLabel('📤 Confirmar upload').setStyle(BStyle.Primary),
               new BB().setCustomId(`dm_cancel:${sid}`).setLabel('❌ Cancelar').setStyle(BStyle.Danger)
             );
-            const dmMsg = await dm.send({ content: 'Envie abaixo a imagem que deseja usar. Quando terminar, clique em **Confirmar upload** para aplicar ou em **Cancelar** para abortar.', components: [confirmRow] });
+            let dmMsg;
+            try {
+              dmMsg = await dm.send({ content: 'Envie abaixo a imagem que deseja usar. Quando terminar, clique em **Confirmar upload** para aplicar ou em **Cancelar** para abortar.', components: [confirmRow] });
+              console.log(`[message] DM sent to ${user.id} for session ${sid}`);
+            } catch (err) {
+              console.error('[message] dm.send failed', err);
+              try { await i.followUp({ content: 'Erro ao enviar DM — verifique se o bot pode enviar mensagens diretas para você.', ephemeral: true }); } catch {}
+              return;
+            }
 
             // Always require a NEW upload: clear any previous pendingImage and do NOT inspect older DM messages.
             session.pendingImage = null;

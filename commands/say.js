@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, RoleSelectMenuBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, RoleSelectMenuBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -49,7 +49,8 @@ module.exports = {
     }
 
     // Always show a modal to collect the message content (so multi-line input is consistent)
-  let content = contentOpt;
+    let content = contentOpt;
+    const sid = `${Date.now()}-${Math.floor(Math.random()*10000)}`;
   // will store role IDs selected to replace {role} placeholders (keeps mention control)
   let roleIdsSelected = null;
     const modal = new ModalBuilder().setCustomId('say_modal').setTitle('Conteúdo (multi-linha)');
@@ -88,6 +89,63 @@ module.exports = {
         await submitted.followUp({ content: 'Cargos aplicados no texto. Enviando...', ephemeral: true });
       } else {
         await submitted.reply({ content: 'Recebido — enviando...', ephemeral: true });
+      }
+
+      // If user included {emoji} placeholders, prompt for emoji inputs (one per line)
+      const emojiPlaceholders = (content.match(/\{emoji\}/gi) || []).length;
+      if (emojiPlaceholders > 0) {
+        const btnRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`say_fill_emoji:${sid}`).setLabel('Preencher emojis').setStyle(ButtonStyle.Primary)
+        );
+        const prompt = await submitted.followUp({ content: `Encontrei ${emojiPlaceholders} placeholder(s) {emoji}. Clique em "Preencher emojis" e cole os emojis/IDs (um por linha) na ordem. Você pode usar <a:name:id> ou apenas o id.`, components: [btnRow], ephemeral: true, fetchReply: true });
+
+        const coll = prompt.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id, max: 1, time: 5*60*1000 });
+        const sel = await new Promise((resolve) => {
+          coll.on('collect', async selI => { try { await selI.deferUpdate(); } catch {} resolve(selI); });
+          coll.on('end', collected => { if (!collected || collected.size === 0) resolve(null); });
+        });
+        if (!sel) {
+          await submitted.followUp({ content: 'Nenhum emoji fornecido — placeholders {emoji} serão removidos.', ephemeral: true });
+          content = content.replace(/\{emoji\}/gi, '');
+        } else {
+          try {
+            const modal2 = new ModalBuilder().setCustomId(`modal_say_emoji:${sid}`).setTitle('Forneça os emojis');
+            modal2.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('emoji_list').setLabel('Cole aqui os emojis (um por linha)').setStyle(TextInputStyle.Paragraph).setRequired(true).setPlaceholder('<a:seta:851206127471034378>\n851206127471034378')));
+            await sel.showModal(modal2);
+            const res = await sel.awaitModalSubmit({ time: 5*60*1000, filter: m => m.user.id === interaction.user.id });
+            const lines = (res.fields.getTextInputValue('emoji_list') || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+            const replacements = [];
+            for (const line of lines.slice(0, emojiPlaceholders)) {
+              const m = line.match(/<(a)?:[A-Za-z0-9_]+:(\d+)>/);
+              if (m) {
+                replacements.push({ markup: m[0], id: m[2], animated: !!m[1] });
+                continue;
+              }
+              const idm = line.match(/^(\d+)$/);
+              if (idm) {
+                // create a placeholder markup; name can be arbitrary
+                replacements.push({ markup: `<:e:${idm[1]}>`, id: idm[1], animated: false });
+                continue;
+              }
+              const any = line.match(/(\d{17,20})/);
+              if (any) {
+                replacements.push({ markup: `<:e:${any[1]}>`, id: any[1], animated: false });
+                continue;
+              }
+            }
+            // sequentially replace placeholders
+            let ri = 0;
+            content = content.replace(/\{emoji\}/gi, () => {
+              const r = replacements[ri++];
+              return r ? r.markup : '';
+            });
+            await res.reply({ content: 'Emojis aplicados no texto.', ephemeral: true });
+          } catch (err) {
+            console.error('emoji modal error', err);
+            await submitted.followUp({ content: 'Erro ao processar emojis; placeholders removidos.', ephemeral: true });
+            content = content.replace(/\{emoji\}/gi, '');
+          }
+        }
       }
     } catch (err) {
       console.error('Modal say error', err);
