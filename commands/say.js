@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, RoleSelectMenuBuilder } = require('discord.js');
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -63,7 +63,29 @@ module.exports = {
       await interaction.showModal(modal);
       const submitted = await interaction.awaitModalSubmit({ time: 5*60*1000, filter: (m) => m.user.id === interaction.user.id });
       content = submitted.fields.getTextInputValue('say_content');
-      await submitted.reply({ content: 'Recebido — enviando...', ephemeral: true });
+
+      // If user included {role} placeholders, ask them to pick roles (can pick multiple to fill multiple placeholders)
+      const placeholders = (content.match(/\{role\}/gi) || []).length;
+      if (placeholders > 0) {
+        // create a RoleSelect menu allowing selecting exactly 'placeholders' roles
+        const roleSelect = new RoleSelectMenuBuilder().setCustomId(`say_role_select:${placeholders}`).setPlaceholder('Selecione os cargos para substituir {role} (ordem importa)').setMinValues(1).setMaxValues(Math.min(placeholders, 25));
+        const row = new ActionRowBuilder().addComponents(roleSelect);
+        const prompt = await submitted.reply({ content: `Encontrei ${placeholders} placeholder(s) {role}. Selecione ${placeholders} cargo(s) na ordem em que quer que substituam os placeholders.`, components: [row], ephemeral: true, fetchReply: true });
+
+        const coll = prompt.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id, max: 1, time: 5*60*1000 });
+        const sel = await new Promise((resolve) => {
+          coll.on('collect', async selI => { try { await selI.deferUpdate(); } catch {} resolve(selI); });
+          coll.on('end', collected => { if (!collected || collected.size === 0) resolve(null); });
+        });
+        if (!sel) { await submitted.followUp({ content: 'Nenhum cargo selecionado — cancelando.', ephemeral: true }); return; }
+        const roleIds = sel.values || [];
+        // replace each {role} occurrence with corresponding selected role mention
+        let idx = 0;
+        content = content.replace(/\{role\}/gi, () => { const rid = roleIds[idx++] || ''; return rid ? `<@&${rid}>` : '{role}'; });
+        await submitted.followUp({ content: 'Cargos aplicados no texto. Enviando...', ephemeral: true });
+      } else {
+        await submitted.reply({ content: 'Recebido — enviando...', ephemeral: true });
+      }
     } catch (err) {
       console.error('Modal say error', err);
       return; // user probably closed modal or timeout

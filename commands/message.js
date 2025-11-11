@@ -178,12 +178,30 @@ module.exports = {
             try { await dm.send('Aguardando nova imagem. Envie a imagem que deseja usar e então clique em **Confirmar upload**.'); } catch {}
 
             // Collect messages with attachments (wait for user to upload a NEW image). No timeout — user will confirm or cancel.
-            const dcoll = dm.createMessageCollector({ filter: m => m.author.id === user.id && m.attachments && m.attachments.size>0 });
+            const dcoll = dm.createMessageCollector({ filter: m => {
+              if (m.author.id !== user.id) return false;
+              if (m.attachments && m.attachments.size>0) return true;
+              // also accept GIFs or images posted as embeds (e.g., GIPHY links)
+              if (m.embeds && m.embeds.length>0) {
+                return m.embeds.some(e => (e.type === 'gifv' || e.type === 'image' || !!(e.image && e.image.url) || !!(e.thumbnail && e.thumbnail.url) || !!e.url));
+              }
+              return false;
+            } });
             dcoll.on('collect', async m => {
               // store pending image, only apply on explicit confirm
-              session.pendingImage = m.attachments.first().url;
-              try { await dm.send('Imagem recebida. Clique em **Confirmar upload** para aplicá-la, ou em **Cancelar** para abortar.'); } catch {}
-              await refresh();
+              let url = null;
+              if (m.attachments && m.attachments.size>0) url = m.attachments.first().url;
+              else if (m.embeds && m.embeds.length>0) {
+                const e = m.embeds.find(e2 => (e2.type === 'gifv' || e2.type === 'image' || !!(e2.image && e2.image.url) || !!(e2.thumbnail && e2.thumbnail.url) || !!e2.url));
+                if (e) url = e.image?.url || e.thumbnail?.url || e.url || null;
+              }
+              if (url) {
+                session.pendingImage = url;
+                try { await dm.send('Imagem recebida. Clique em **Confirmar upload** para aplicá-la, ou em **Cancelar** para abortar.'); } catch {}
+                await refresh();
+              } else {
+                try { await dm.send('Não consegui detectar uma imagem válida no que você enviou. Envie um arquivo de imagem/GIF.'); } catch {}
+              }
             });
 
             // Collector for the confirm/cancel buttons in DM
@@ -191,7 +209,9 @@ module.exports = {
             compColl.on('collect', async btnI => {
               try {
                 await btnI.deferUpdate();
-                const [, action] = btnI.customId.split(':'); // dm_confirm:<sid> or dm_cancel:<sid>
+                const [prefix, id] = btnI.customId.split(':'); // e.g. 'dm_confirm', sid
+                if (id !== sid) return; // ignore other sessions
+                const action = prefix && prefix.split('_')[1]; // 'confirm' or 'cancel'
                 if (action === 'confirm') {
                   if (session.pendingImage) {
                     session.container.image = session.pendingImage;
