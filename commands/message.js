@@ -86,7 +86,7 @@ module.exports = {
     )];
 
     const panelE = new EB().setTitle('Criar mensagem (simples)').setDescription('Use ➕ Adicionar para criar conteúdo. Envie imagem somente se usar Upload (DM).');
-    const panel = await interaction.reply({ embeds: [panelE], components: controls(sid), fetchReply: true });
+  const panel = await interaction.reply({ embeds: [panelE], components: controls(sid), fetchReply: true, ephemeral: true });
 
     const refresh = async () => {
       const e = new EB();
@@ -178,6 +178,7 @@ module.exports = {
             try { await dm.send('Aguardando nova imagem. Envie a imagem que deseja usar e então clique em **Confirmar upload**.'); } catch {}
 
             // Collect messages with attachments (wait for user to upload a NEW image). No timeout — user will confirm or cancel.
+            const imgUrlRegex = /(https?:\/\/.+\.(?:png|jpe?g|gif|webp))(?:\?.*)?$/i;
             const dcoll = dm.createMessageCollector({ filter: m => {
               if (m.author.id !== user.id) return false;
               if (m.attachments && m.attachments.size>0) return true;
@@ -185,6 +186,8 @@ module.exports = {
               if (m.embeds && m.embeds.length>0) {
                 return m.embeds.some(e => (e.type === 'gifv' || e.type === 'image' || !!(e.image && e.image.url) || !!(e.thumbnail && e.thumbnail.url) || !!e.url));
               }
+              // accept plain image links in message content
+              if (m.content && imgUrlRegex.test(m.content.trim())) return true;
               return false;
             } });
             dcoll.on('collect', async m => {
@@ -195,8 +198,14 @@ module.exports = {
                 const e = m.embeds.find(e2 => (e2.type === 'gifv' || e2.type === 'image' || !!(e2.image && e2.image.url) || !!(e2.thumbnail && e2.thumbnail.url) || !!e2.url));
                 if (e) url = e.image?.url || e.thumbnail?.url || e.url || null;
               }
+              // if still no url, check for a plain url in content
+              if (!url && m.content) {
+                const match = m.content.trim().match(imgUrlRegex);
+                if (match) url = match[1];
+              }
               if (url) {
                 session.pendingImage = url;
+                console.log(`[message] DM upload received for session ${sid}: ${url}`);
                 try { await dm.send('Imagem recebida. Clique em **Confirmar upload** para aplicá-la, ou em **Cancelar** para abortar.'); } catch {}
                 await refresh();
               } else {
@@ -214,6 +223,7 @@ module.exports = {
                 const action = prefix && prefix.split('_')[1]; // 'confirm' or 'cancel'
                 if (action === 'confirm') {
                   if (session.pendingImage) {
+                    console.log(`[message] DM confirm pressed for session ${sid}, applying image ${session.pendingImage}`);
                     session.container.image = session.pendingImage;
                     delete session.pendingImage;
                     try { await dm.send('Upload confirmado. Imagem aplicada.'); } catch {}
@@ -438,7 +448,6 @@ module.exports = {
         if (act === 'preview') {
           if (!session.container) return i.reply({ content: 'Nenhum container.', ephemeral: true });
           try {
-            const ch = await interaction.client.channels.fetch(session.channelId);
             const c = session.container;
             const e = new EB();
             if (c.title) e.setTitle(c.title);
@@ -455,7 +464,6 @@ module.exports = {
                   btn.setStyle(BStyle.Link);
                   try { btn.setURL(b.url||b.hook||''); } catch {}
                 } else if (b.type === 'webhook') {
-                  // prefer hex-based mapping if provided, otherwise use textual style
                   const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
                   if (hexStyle) btn.setStyle(hexStyle); else btn.setStyle(mapButtonStyle(b.style));
                   btn.setCustomId(`hook_preview:${sid}:${i}`);
@@ -467,9 +475,9 @@ module.exports = {
               });
               comps.push(r);
             }
-            await ch.send({ content:`Pré-visualização por ${interaction.user.tag}:`, embeds:[e], components:comps });
-            await i.reply({ content:'Pré-visualização enviada.', ephemeral:true });
-          } catch (err) { console.error(err); await i.reply({ content:'Erro na pré-visualização.', ephemeral:true }); }
+            // Send an ephemeral preview to the command user (visible only to them)
+            await i.reply({ content: 'Pré-visualização (somente você):', embeds: [e], components: comps, ephemeral: true });
+          } catch (err) { console.error(err); try { await i.reply({ content:'Erro na pré-visualização.', ephemeral:true }); } catch {} }
           return;
         }
 
