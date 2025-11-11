@@ -569,10 +569,18 @@ module.exports = {
               const r = new ARB();
               c.buttons.slice(0,5).forEach((b,i) => {
                 const btn = new BB().setLabel(b.label||`btn${i}`);
-                if (b.type === 'url') {
-                  btn.setStyle(BStyle.Link);
-                  try { btn.setURL(b.url||b.hook||''); } catch {}
-                } else if (b.type === 'webhook') {
+                  if (b.type === 'url') {
+                    // If user provided a hex for the URL button, create a colored proxy button
+                    // (it won't open the URL directly; it'll trigger an ephemeral response with a Link button).
+                    if (b.hex) {
+                      const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
+                      if (hexStyle) btn.setStyle(hexStyle); else btn.setStyle(mapButtonStyle(b.style));
+                      btn.setCustomId(`url_preview:${sid}:${i}`);
+                    } else {
+                      btn.setStyle(BStyle.Link);
+                      try { btn.setURL(b.url||b.hook||''); } catch {}
+                    }
+                  } else if (b.type === 'webhook') {
                   const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
                   if (hexStyle) btn.setStyle(hexStyle); else btn.setStyle(mapButtonStyle(b.style));
                   btn.setCustomId(`hook_preview:${sid}:${i}`);
@@ -609,8 +617,15 @@ module.exports = {
               c.buttons.slice(0,5).forEach((b,i) => {
                 const btn = new BB().setLabel(b.label||`btn${i}`);
                 if (b.type === 'url') {
-                  btn.setStyle(BStyle.Link);
-                  try { btn.setURL(b.url||b.hook||''); } catch {}
+                  // If hex provided, create a colored proxy button that will show the URL via an ephemeral reply on click.
+                  if (b.hex) {
+                    const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
+                    if (hexStyle) btn.setStyle(hexStyle); else btn.setStyle(mapButtonStyle(b.style));
+                    btn.setCustomId(`message_button_tmp:${i}`);
+                  } else {
+                    btn.setStyle(BStyle.Link);
+                    try { btn.setURL(b.url||b.hook||''); } catch {}
+                  }
                 } else if (b.type === 'webhook') {
                   // prefer hex-based mapping if provided, otherwise use textual style
                   const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
