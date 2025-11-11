@@ -208,10 +208,28 @@ module.exports = {
 
     const missingEmojiImages = []; // array of {id, animated}
     for (const [id, info] of foundEmojis.entries()) {
+      // Determine accessibility without relying on fetch(): prefer cache + guild membership.
       let accessible = false;
       try {
-        const e = await interaction.client.emojis.fetch(id).catch(() => null);
-        if (e) accessible = true;
+        const cached = interaction.client.emojis.cache.get(id);
+        if (cached) {
+          // If the emoji's guildId is the same as the target guild, or the bot is a member of the emoji's guild,
+          // then the bot can use the emoji inline.
+          const emojiGuildId = cached.guildId || (cached.guild ? cached.guild.id : null);
+          if (!emojiGuildId) {
+            // no guildId (rare) — conservatively treat as inaccessible
+            accessible = false;
+          } else if (target && target.guild && target.guild.id === emojiGuildId) {
+            accessible = true;
+          } else if (interaction.client.guilds.cache.has(emojiGuildId)) {
+            accessible = true;
+          } else {
+            accessible = false;
+          }
+        } else {
+          // not in cache: assume inaccessible (we avoid fetching here to prevent transient failures)
+          accessible = false;
+        }
       } catch (e) {
         accessible = false;
       }
@@ -229,17 +247,12 @@ module.exports = {
         const allowedMentions = roleIdsSelected && roleIdsSelected.length > 0 ? { roles: roleIdsSelected } : { parse: ['users', 'roles', 'everyone'] };
         await target.send({ content: p, allowedMentions });
       }
-      // If the bot cannot use certain custom emojis inline, send those emojis as image embeds
-      // (this reproduces the previous behavior where animated emojis become GIF attachments).
-      for (const me of missingEmojiImages) {
-        try {
-          const url = `https://cdn.discordapp.com/emojis/${me.id}.${me.animated ? 'gif' : 'png'}`;
-          const emb = new EmbedBuilder().setImage(url);
-          await target.send({ embeds: [emb] });
-        } catch (e) { console.error('Erro ao enviar emoji como imagem', e); }
+      // If some emojis were removed because the bot can't use them inline, report them ephemerally
+      let replyText = `Mensagem enviada em ${target}${parts.length > 1 ? ` (dividida em ${parts.length} partes)` : ''}`;
+      if (missingEmojiImages.length > 0) {
+        const idsList = missingEmojiImages.map(m => `${m.id}${m.animated ? ' (animado)' : ''}`).join(', ');
+        replyText += `\n\nOs seguintes emojis não puderam ser usados inline e foram removidos: ${idsList}.`; 
       }
-
-      const replyText = `Mensagem enviada em ${target}${parts.length > 1 ? ` (dividida em ${parts.length} partes)` : ''}`;
       try {
         if (!interaction.replied) {
           return await interaction.reply({ content: replyText, ephemeral: true });
