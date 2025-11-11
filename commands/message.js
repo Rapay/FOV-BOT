@@ -105,9 +105,10 @@ module.exports = {
       try {
         const base = controls(sid);
         // if a container exists, show the optional actions in a second row so the main collector handles them
-        if (session.container) {
+          if (session.container) {
           const extra = new ARB().addComponents(
             new BB().setCustomId(`uploaddm:${sid}`).setLabel('📤 Upload (DM)').setStyle(BStyle.Primary),
+            new BB().setCustomId(`applydm:${sid}`).setLabel('📥 Usar última DM').setStyle(BStyle.Secondary),
             new BB().setCustomId(`addbtn:${sid}`).setLabel('➕ Adicionar Botão').setStyle(BStyle.Secondary),
             new BB().setCustomId(`managebtns:${sid}`).setLabel('🔧 Gerenciar Botões').setStyle(BStyle.Secondary),
             new BB().setCustomId(`done:${sid}`).setLabel('✅ Concluído').setStyle(BStyle.Success)
@@ -271,6 +272,32 @@ module.exports = {
             compColl.on('end', () => { try { dmMsg.edit({ components: [ new ARB().addComponents(new BB().setCustomId('dm_confirm_timeout').setLabel('Tempo esgotado').setStyle(BStyle.Secondary).setDisabled(true)) ] }); } catch {} });
 
           } catch (err) { console.error('DM upload error', err); return i.reply({ content: 'Não foi possível abrir DM.', ephemeral: true }); }
+          return;
+        }
+        if (act === 'applydm') {
+          // Try to fetch the user's DM and use the last image attachment/embed found
+          try {
+            const user = interaction.user;
+            console.log(`[message] applydm requested by ${user.id} for session ${sid}`);
+            const dm = await user.createDM();
+            const msgs = await dm.messages.fetch({ limit: 30 });
+            let foundUrl = null;
+            for (const m of msgs.values()) {
+              if (m.author && m.author.id !== user.id) continue;
+              if (m.attachments && m.attachments.size>0) { foundUrl = m.attachments.first().url; break; }
+              if (m.embeds && m.embeds.length>0) {
+                const e = m.embeds.find(e2 => (e2.type === 'gifv' || e2.type === 'image' || !!(e2.image && e2.image.url) || !!(e2.thumbnail && e2.thumbnail.url) || !!e2.url));
+                if (e) { foundUrl = e.image?.url || e.thumbnail?.url || e.url || null; if (foundUrl) break; }
+              }
+              // check for plain image links
+              const imgMatch = (m.content || '').trim().match(/(https?:\/\/.+\.(?:png|jpe?g|gif|webp))(?:\?.*)?$/i);
+              if (imgMatch) { foundUrl = imgMatch[1]; break; }
+            }
+            if (!foundUrl) return i.reply({ content: 'Nenhuma imagem encontrada nas suas DMs (últimas 30 mensagens).', ephemeral: true });
+            session.container.image = foundUrl;
+            await i.reply({ content: 'Imagem aplicada a partir da sua última DM.', ephemeral: true });
+            await refresh();
+          } catch (err) { console.error('applydm err', err); try { await i.reply({ content: 'Erro ao buscar nas suas DMs.', ephemeral: true }); } catch {} }
           return;
         }
         if (act === 'addbtn') {
