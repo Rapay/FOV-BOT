@@ -4,9 +4,10 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('say')
     .setDescription('Faz o bot enviar texto cru (preserva marcação do Discord como spoilers, negrito, etc.)')
-    .addStringOption(o => o.setName('content').setDescription('Texto a ser enviado pelo bot').setRequired(true))
-    .addChannelOption(o => o.setName('channel').setDescription('Canal para enviar a mensagem (opcional)').setRequired(false))
-    .addBooleanOption(o => o.setName('ephemeral').setDescription('Responder ao autor de forma efêmera indicando envio?').setRequired(false)),
+  .addStringOption(o => o.setName('content').setDescription('Texto a ser enviado pelo bot').setRequired(false))
+  .addChannelOption(o => o.setName('channel').setDescription('Canal para enviar a mensagem (opcional)').setRequired(false))
+  .addBooleanOption(o => o.setName('ephemeral').setDescription('Responder ao autor de forma efêmera indicando envio?').setRequired(false))
+  .addRoleOption(o => o.setName('role').setDescription('Cargo para mencionar no início da mensagem (opcional)').setRequired(false)),
 
   async execute(interaction) {
     // Restrict usage to staff: ManageMessages or Administrator
@@ -71,11 +72,17 @@ module.exports = {
     if (!content || content.trim().length === 0) return interaction.reply({ content: 'Conteúdo vazio não permitido.', ephemeral: true });
 
     try {
+      const roleOpt = interaction.options.getRole('role');
       const parts = splitMessage(content, 2000);
-      for (const p of parts) {
-        await target.send({ content: p, allowedMentions: { parse: ['users', 'roles', 'everyone'] } });
+      const allowedFirst = roleOpt ? { roles: [roleOpt.id], parse: ['users'] } : { parse: ['users', 'roles', 'everyone'] };
+      const allowedOther = roleOpt ? { roles: [], parse: ['users'] } : { parse: ['users', 'roles', 'everyone'] };
+      for (let idx = 0; idx < parts.length; idx++) {
+        const p = parts[idx];
+        const contentToSend = (idx === 0 && roleOpt) ? `<@&${roleOpt.id}> ${p}` : p;
+        const allowedMentions = (idx === 0) ? allowedFirst : allowedOther;
+        await target.send({ content: contentToSend, allowedMentions });
       }
-      const replyText = `Mensagem enviada em ${target}${parts.length > 1 ? ` (dividida em ${parts.length} partes)` : ''}`;
+      const replyText = `Mensagem enviada em ${target}${parts.length > 1 ? ` (dividida em ${parts.length} partes)` : ''}${roleOpt ? ` (mencionando ${roleOpt.name})` : ''}`;
       return interaction.reply({ content: replyText, ephemeral: true });
     } catch (err) {
       console.error('Erro em /say:', err);

@@ -166,64 +166,59 @@ module.exports = {
             const dm = await user.createDM();
             await i.reply({ content: 'Abra DM e envie a imagem (60s) e clique em Confirmar upload quando pronto.', ephemeral: true });
 
-            // Send DM with a Confirm button so the user can explicitly confirm the upload
-            const confirmRow = new ARB().addComponents(new BB().setCustomId(`dm_confirm:${sid}`).setLabel('📤 Confirmar upload').setStyle(BStyle.Primary));
-            const dmMsg = await dm.send({ content: 'Envie abaixo a imagem que deseja usar. Quando terminar, clique em **Confirmar upload** (60s).', components: [confirmRow] });
+            // Send DM with Confirm and Cancel buttons so the user can confirm or abort the upload
+            const confirmRow = new ARB().addComponents(
+              new BB().setCustomId(`dm_confirm:${sid}`).setLabel('📤 Confirmar upload').setStyle(BStyle.Primary),
+              new BB().setCustomId(`dm_cancel:${sid}`).setLabel('❌ Cancelar').setStyle(BStyle.Danger)
+            );
+            const dmMsg = await dm.send({ content: 'Envie abaixo a imagem que deseja usar. Quando terminar, clique em **Confirmar upload** para aplicar ou em **Cancelar** para abortar.', components: [confirmRow] });
 
-            // Look for any recent attachments first — but DO NOT apply automatically.
-            // Store it as a pending image and require the user to click Confirm to apply.
-            const recent = await dm.messages.fetch({ limit: 10 }).catch(()=>null);
-            if (recent) {
-              const found = recent.find(m => m.author.id === user.id && m.attachments && m.attachments.size>0);
-              if (found) {
-                session.pendingImage = found.attachments.first().url;
-                try { await dm.send('Encontrei uma imagem recente na DM. Clique em **Confirmar upload** para aplicá-la.'); } catch {}
-                try { await i.followUp({ content: 'Imagem encontrada na DM — clique em Confirmar upload para aplicá-la.', ephemeral: true }); } catch {}
-                await refresh();
-                // do not return; still wait for confirm
-              }
-            }
+            // Always require a NEW upload: clear any previous pendingImage and do NOT inspect older DM messages.
+            session.pendingImage = null;
+            try { await dm.send('Aguardando nova imagem. Envie a imagem que deseja usar e então clique em **Confirmar upload**.'); } catch {}
 
-            // Collect messages with attachments
-            const dcoll = dm.createMessageCollector({ filter: m => m.author.id === user.id && m.attachments && m.attachments.size>0, max:1, time:60*1000 });
+            // Collect messages with attachments (wait for user to upload a NEW image). No timeout — user will confirm or cancel.
+            const dcoll = dm.createMessageCollector({ filter: m => m.author.id === user.id && m.attachments && m.attachments.size>0 });
             dcoll.on('collect', async m => {
               // store pending image, only apply on explicit confirm
               session.pendingImage = m.attachments.first().url;
-              try { await dm.send('Imagem recebida. Clique em **Confirmar upload** para aplicá-la.'); } catch {}
+              try { await dm.send('Imagem recebida. Clique em **Confirmar upload** para aplicá-la, ou em **Cancelar** para abortar.'); } catch {}
               await refresh();
             });
-            dcoll.on('end', collected => { if (!collected || collected.size===0) try{ dm.send('Tempo esgotado: nenhuma imagem recebida.'); } catch{} });
 
-            // Collector for the confirm button in DM
-            const compColl = dmMsg.createMessageComponentCollector({ filter: b => b.user.id === user.id, max:1, time:60*1000 });
+            // Collector for the confirm/cancel buttons in DM
+            const compColl = dmMsg.createMessageComponentCollector({ filter: b => b.user.id === user.id });
             compColl.on('collect', async btnI => {
               try {
                 await btnI.deferUpdate();
-                // only apply if there's a pendingImage set by the user
-                if (session.pendingImage) {
-                  session.container.image = session.pendingImage;
-                  delete session.pendingImage;
-                  try { await dm.send('Upload confirmado. Imagem aplicada.'); } catch {}
-                  try { await i.followUp({ content: 'Imagem aplicada.', ephemeral: true }); } catch {}
-                  try { await dmMsg.edit({ components: [ new ARB().addComponents(new BB().setCustomId('dm_confirm_disabled').setLabel('✔️ Confirmado').setStyle(BStyle.Success).setDisabled(true)) ] }); } catch {}
-                  await refresh();
-                  return;
-                }
-                // otherwise, check recent messages as a last resort (but still require explicit confirmation)
-                const nowRecent = await dm.messages.fetch({ limit: 10 }).catch(()=>null);
-                if (nowRecent) {
-                  const found = nowRecent.find(m => m.author.id === user.id && m.attachments && m.attachments.size>0);
-                  if (found) {
-                    session.container.image = found.attachments.first().url;
+                const [, action] = btnI.customId.split(':'); // dm_confirm:<sid> or dm_cancel:<sid>
+                if (action === 'confirm') {
+                  if (session.pendingImage) {
+                    session.container.image = session.pendingImage;
                     delete session.pendingImage;
                     try { await dm.send('Upload confirmado. Imagem aplicada.'); } catch {}
                     try { await i.followUp({ content: 'Imagem aplicada.', ephemeral: true }); } catch {}
-                    try { await dmMsg.edit({ components: [ new ARB().addComponents(new BB().setCustomId('dm_confirm_disabled').setLabel('✔️ Confirmado').setStyle(BStyle.Success).setDisabled(true)) ] }); } catch {}
+                    try { await dmMsg.edit({ components: [ new ARB().addComponents(new BB().setCustomId('dm_confirm_disabled').setLabel('✔️ Confirmado').setStyle(BStyle.Success).setDisabled(true), new BB().setCustomId('dm_cancel_disabled').setLabel('Cancelado').setStyle(BStyle.Secondary).setDisabled(true)) ] }); } catch {}
+                    // stop collectors
+                    try { dcoll.stop(); } catch {}
+                    try { compColl.stop(); } catch {}
                     await refresh();
+                    return;
+                  } else {
+                    try { await btnI.followUp({ content: 'Nenhuma imagem nova encontrada. Envie a imagem na DM antes de confirmar.', ephemeral: true }); } catch {}
                     return;
                   }
                 }
-                try { await btnI.followUp({ content: 'Nenhuma imagem encontrada. Envie a imagem antes de confirmar.', ephemeral: true }); } catch {}
+                if (action === 'cancel') {
+                  // clear pending and abort
+                  session.pendingImage = null;
+                  try { await dm.send('Upload cancelado.'); } catch {}
+                  try { await i.followUp({ content: 'Upload cancelado.', ephemeral: true }); } catch {}
+                  try { await dmMsg.edit({ components: [ new ARB().addComponents(new BB().setCustomId('dm_confirm_disabled').setLabel('Confirmar').setStyle(BStyle.Primary).setDisabled(true), new BB().setCustomId('dm_cancel_disabled').setLabel('✔️ Cancelado').setStyle(BStyle.Danger).setDisabled(true)) ] }); } catch {}
+                  try { dcoll.stop(); } catch {}
+                  try { compColl.stop(); } catch {}
+                  return;
+                }
               } catch (err) { console.error('dm confirm err', err); }
             });
             compColl.on('end', () => { try { dmMsg.edit({ components: [ new ARB().addComponents(new BB().setCustomId('dm_confirm_timeout').setLabel('Tempo esgotado').setStyle(BStyle.Secondary).setDisabled(true)) ] }); } catch {} });
