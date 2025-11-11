@@ -423,7 +423,6 @@ module.exports = {
           const selColl = replyMsg.createMessageComponentCollector({ filter: b => b.user.id === interaction.user.id, max:1, time:2*60*1000 });
           selColl.on('collect', async selI => {
             try {
-              await selI.deferUpdate();
               const parts = selI.customId.split(':');
               const chosen = parts[2] || 'primary';
               // open modal to collect label/url/hex
@@ -464,7 +463,6 @@ module.exports = {
           const selColl = replyMsg.createMessageComponentCollector({ filter: b => b.user.id === interaction.user.id, max:1, time:2*60*1000 });
           selColl.on('collect', async selI => {
             try {
-              await selI.deferUpdate();
               const parts = selI.customId.split(':');
               const chosen = parts[2] || 'primary';
               const modal = new MB().setCustomId(`modal_btn_hook:${sid}`).setTitle('Botão Webhook');
