@@ -647,6 +647,10 @@ module.exports = {
               // load current components, replace tmp ids with message_button_webhook:<messageId>:<idx>
               try {
                 const newRows = [];
+                const failedPersist = [];
+                const fs = require('fs');
+                const path = require('path');
+                const dbPath = path.join(__dirname, '..', 'data', 'message_buttons.json');
                 for (const row of sent.components) {
                   const newRow = ARB.from(row);
                   const comps = newRow.components.map((comp) => {
@@ -660,10 +664,25 @@ module.exports = {
                         if (btnInfo) {
                           if (btnInfo.type === 'webhook' && btnInfo.hook) {
                             saveHook(`${sent.id}:${btnIdx}`, btnInfo.hook);
+                            console.log('[message] saved hook mapping', `${sent.id}:${btnIdx}`, btnInfo.hook);
                           } else if (btnInfo.type === 'url' && btnInfo.url) {
                             // store as an object to indicate this is a url-proxy mapping
-                            saveHook(`${sent.id}:${btnIdx}`, { type: 'url_proxy', url: btnInfo.url });
+                            const val = { type: 'url_proxy', url: btnInfo.url };
+                            saveHook(`${sent.id}:${btnIdx}`, val);
+                            console.log('[message] saved hook mapping', `${sent.id}:${btnIdx}`, JSON.stringify(val));
                           }
+                          // verify persistence immediately (best-effort) without awaiting inside map
+                          try {
+                            if (fs.existsSync(dbPath)) {
+                              const raw = fs.readFileSync(dbPath, 'utf8') || '{}';
+                              const obj = JSON.parse(raw || '{}');
+                              const k = `${sent.id}:${btnIdx}`;
+                              if (!Object.prototype.hasOwnProperty.call(obj, k)) {
+                                console.error('[message] saveHook verification FAILED for', k);
+                                failedPersist.push({ key: k, idx: btnIdx });
+                              }
+                            }
+                          } catch (verr) { console.error('[message] saveHook verification error', verr); }
                         }
                       } catch (e) { console.error('saveHook mapping error', e); }
                       return nb;
@@ -674,7 +693,16 @@ module.exports = {
                   const rebuilt = new ARB().addComponents(...comps);
                   newRows.push(rebuilt);
                 }
-                await sent.edit({ components: newRows });
+                // If we detected failed persistence, notify the command issuer after edit
+                try {
+                  await sent.edit({ components: newRows });
+                } catch (e) { console.error('Failed to rewrite webhook button IDs', e); }
+                if (failedPersist.length > 0) {
+                  try {
+                    const keys = failedPersist.map(f => f.key).join(', ');
+                    try { await interaction.followUp({ content: `Aviso: falha ao persistir ações para botões: ${keys}. Entrarei em fallback.`, ephemeral: true }); } catch (e) { try { await interaction.user.send(`Aviso: falha ao persistir ações para botões: ${keys} na mensagem ${sent.id}.`); } catch {} }
+                  } catch (e) { console.error('[message] failed to notify about failedPersist', e); }
+                }
               } catch (e) { console.error('Failed to rewrite webhook button IDs', e); }
             }
 
