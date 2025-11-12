@@ -568,27 +568,36 @@ module.exports = {
             if (c.buttons && c.buttons.length) {
               const r = new ARB();
               c.buttons.slice(0,5).forEach((b,i) => {
-                const btn = new BB().setLabel(b.label||`btn${i}`);
-                  if (b.type === 'url') {
-                    // If user provided a hex for the URL button, create a colored proxy button
-                    // (it won't open the URL directly; it'll trigger an ephemeral response with a Link button).
-                    if (b.hex) {
-                      const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
-                      if (hexStyle) btn.setStyle(hexStyle); else btn.setStyle(mapButtonStyle(b.style));
-                      btn.setCustomId(`url_preview:${sid}:${i}`);
-                    } else {
-                      btn.setStyle(BStyle.Link);
-                      try { btn.setURL(b.url||b.hook||''); } catch {}
-                    }
-                  } else if (b.type === 'webhook') {
+                // For URL buttons with a hex color, create two buttons in the preview row:
+                // 1) a colored proxy (interactive) to show the color, and
+                // 2) a Link button that opens the URL directly (so users can still navigate)
+                if (b.type === 'url') {
+                  if (b.hex) {
+                    const proxy = new BB().setLabel(b.label||`btn${i}`);
+                    const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
+                    if (hexStyle) proxy.setStyle(hexStyle); else proxy.setStyle(mapButtonStyle(b.style));
+                    proxy.setCustomId(`url_preview:${sid}:${i}`);
+                    const link = new BB().setLabel('Abrir').setStyle(BStyle.Link);
+                    try { link.setURL(b.url||''); } catch {}
+                    r.addComponents(proxy, link);
+                  } else {
+                    const btn = new BB().setLabel(b.label||`btn${i}`);
+                    btn.setStyle(BStyle.Link);
+                    try { btn.setURL(b.url||b.hook||''); } catch {}
+                    r.addComponents(btn);
+                  }
+                } else if (b.type === 'webhook') {
+                  const btn = new BB().setLabel(b.label||`btn${i}`);
                   const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
                   if (hexStyle) btn.setStyle(hexStyle); else btn.setStyle(mapButtonStyle(b.style));
                   btn.setCustomId(`hook_preview:${sid}:${i}`);
+                  r.addComponents(btn);
                 } else {
+                  const btn = new BB().setLabel(b.label||`btn${i}`);
                   btn.setStyle(BStyle.Secondary);
                   btn.setCustomId(`btn:${sid}:${i}`);
+                  r.addComponents(btn);
                 }
-                r.addComponents(btn);
               });
               comps.push(r);
             }
@@ -615,27 +624,34 @@ module.exports = {
             if (c.buttons && c.buttons.length) {
               const r = new ARB();
               c.buttons.slice(0,5).forEach((b,i) => {
-                const btn = new BB().setLabel(b.label||`btn${i}`);
+                // For URL buttons with hex, include both a colored proxy (interactive) and a Link button
                 if (b.type === 'url') {
-                  // If hex provided, create a colored proxy button that will show the URL via an ephemeral reply on click.
                   if (b.hex) {
+                    const proxy = new BB().setLabel(b.label||`btn${i}`);
                     const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
-                    if (hexStyle) btn.setStyle(hexStyle); else btn.setStyle(mapButtonStyle(b.style));
-                    btn.setCustomId(`message_button_tmp:${i}`);
+                    if (hexStyle) proxy.setStyle(hexStyle); else proxy.setStyle(mapButtonStyle(b.style));
+                    proxy.setCustomId(`message_button_tmp:${i}`);
+                    const link = new BB().setLabel('Abrir').setStyle(BStyle.Link);
+                    try { link.setURL(b.url||''); } catch {}
+                    r.addComponents(proxy, link);
                   } else {
+                    const btn = new BB().setLabel(b.label||`btn${i}`);
                     btn.setStyle(BStyle.Link);
                     try { btn.setURL(b.url||b.hook||''); } catch {}
+                    r.addComponents(btn);
                   }
                 } else if (b.type === 'webhook') {
-                  // prefer hex-based mapping if provided, otherwise use textual style
+                  const btn = new BB().setLabel(b.label||`btn${i}`);
                   const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
                   if (hexStyle) btn.setStyle(hexStyle); else btn.setStyle(mapButtonStyle(b.style));
                   btn.setCustomId(`message_button_tmp:${i}`);
+                  r.addComponents(btn);
                 } else {
+                  const btn = new BB().setLabel(b.label||`btn${i}`);
                   btn.setStyle(BStyle.Secondary);
                   btn.setCustomId(`btn:${sid}:${i}`);
+                  r.addComponents(btn);
                 }
-                r.addComponents(btn);
               });
               comps.push(r);
             }
