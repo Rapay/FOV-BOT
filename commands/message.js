@@ -139,11 +139,10 @@ module.exports = {
 
         if (act === 'add') {
           const modal = new MB().setCustomId(`modal_add:${sid}`).setTitle('Adicionar');
-          modal.addComponents(
+            modal.addComponents(
             new ARB().addComponents(new TIB().setCustomId('t_title').setLabel('Título').setStyle(TIS.Short).setRequired(false)),
             new ARB().addComponents(new TIB().setCustomId('t_desc').setLabel('Descrição').setStyle(TIS.Paragraph).setRequired(false)),
-            new ARB().addComponents(new TIB().setCustomId('t_imgtext').setLabel('Legenda (opcional)').setStyle(TIS.Short).setRequired(false)),
-            new ARB().addComponents(new TIB().setCustomId('t_color').setLabel('Cor do embed (hex, ex: #ff0000)').setStyle(TIS.Short).setRequired(false))
+            new ARB().addComponents(new TIB().setCustomId('t_imgtext').setLabel('Legenda (opcional)').setStyle(TIS.Short).setRequired(false))
           );
           try {
             await i.showModal(modal);
@@ -151,13 +150,8 @@ module.exports = {
             const title = sub.fields.getTextInputValue('t_title') || null;
             const description = sub.fields.getTextInputValue('t_desc') || null;
             const imageText = sub.fields.getTextInputValue('t_imgtext') || null;
-            const colorRaw = sub.fields.getTextInputValue('t_color') || null;
-            const color = normalizeHexColor(colorRaw);
             session.container = { title, description, image: null, imageText, buttons: [] };
-            if (color) session.container.color = color;
             let replyMsg = 'Container criado. Você pode enviar imagem via DM (opcional) ou adicionar botões.';
-            if (colorRaw && !color) replyMsg += ' (cor inválida fornecida; será ignorada — use #RRGGBB)';
-            else if (color) replyMsg += ` (cor aplicada: ${color})`;
             await sub.reply({ content: replyMsg, ephemeral: true });
             await refresh();
           } catch {}
@@ -358,18 +352,14 @@ module.exports = {
               const modal = new MB().setCustomId(`modal_btn_url:${sid}`).setTitle('Botão URL');
               modal.addComponents(
                 new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)),
-                new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true)),
-                new ARB().addComponents(new TIB().setCustomId('b_hex').setLabel('Hex do botão (opcional, ex: #ff0000)').setStyle(TIS.Short).setRequired(false))
+                new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true))
               );
               await selI.showModal(modal);
               try {
                 const sub = await selI.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id });
                 session.container.buttons = session.container.buttons||[];
-                const rawHex = sub.fields.getTextInputValue('b_hex') || null;
-                const hex = normalizeHexColor(rawHex);
                 const styleName = (chosen === 'link') ? 'Link' : (chosen.charAt(0).toUpperCase() + chosen.slice(1));
-                session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url'), style: styleName, hex });
-                if (hex) session.container.color = hex;
+                session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url'), style: styleName });
                 await sub.reply({ content:'Botão URL adicionado.', ephemeral:true });
                 await refresh();
               } catch {}
@@ -416,18 +406,14 @@ module.exports = {
                       const modal = new MB().setCustomId(`modal_edit_url:${sid}:${bIdx}`).setTitle('Editar Botão URL');
                       modal.addComponents(
                         new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)),
-                        new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true)),
-                        new ARB().addComponents(new TIB().setCustomId('b_hex').setLabel('Hex do botão (opcional, ex: #ff0000)').setStyle(TIS.Short).setRequired(false))
+                        new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true))
                       );
                       await ai.showModal(modal);
                       try {
                         const res = await ai.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id === interaction.user.id });
                         targetBtn.label = res.fields.getTextInputValue('lbl');
                         targetBtn.url = res.fields.getTextInputValue('url');
-                        const rawHex = res.fields.getTextInputValue('b_hex') || null;
-                        targetBtn.hex = normalizeHexColor(rawHex);
-                        // if user edited the button hex, apply it to the container embed color as well
-                        if (targetBtn.hex) session.container.color = targetBtn.hex;
+                        // note: hex/color removed; styles are chosen from the 4 presets
                         await res.reply({ content: 'Botão atualizado.', ephemeral: true });
                         await refresh();
                       } catch {}
@@ -506,39 +492,19 @@ module.exports = {
             if (c.buttons && c.buttons.length) {
               const r = new ARB();
               c.buttons.slice(0,5).forEach((b,i) => {
-                // For URL buttons with a hex color, create two buttons in the preview row:
-                // 1) a colored proxy (interactive) to show the color, and
-                // 2) a Link button that opens the URL directly (so users can still navigate)
                     if (b.type === 'url') {
-                  if (b.hex) {
+                    // Always create a colored proxy button (reflecting the chosen style) and a Link button for navigation
                     const proxy = new BB().setLabel(b.label||`btn${i}`);
-                    const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
-                    if (hexStyle) proxy.setStyle(hexStyle); else proxy.setStyle(mapButtonStyle(b.style));
+                    try { proxy.setStyle(mapButtonStyle(b.style)); } catch { proxy.setStyle(BStyle.Secondary); }
                     proxy.setCustomId(`url_preview:${sid}:${i}`);
-                    // only create a Link button if we have a valid URL
                     if (b.url) {
                       const link = new BB().setLabel('Abrir').setStyle(BStyle.Link);
                       try { link.setURL(b.url); } catch {}
                       r.addComponents(proxy, link);
                     } else {
-                      // no URL: show only the colored proxy in preview
                       r.addComponents(proxy);
                     }
                   } else {
-                    if (b.url) {
-                      const btn = new BB().setLabel(b.label||`btn${i}`);
-                      btn.setStyle(BStyle.Link);
-                      try { btn.setURL(b.url); } catch {}
-                      r.addComponents(btn);
-                    } else {
-                      // no URL: show a disabled secondary placeholder so preview doesn't error
-                      const btn = new BB().setLabel(b.label||`btn${i}`);
-                      btn.setStyle(BStyle.Secondary);
-                      try { btn.setDisabled(true); } catch {}
-                      r.addComponents(btn);
-                    }
-                  }
-                } else {
                   const btn = new BB().setLabel(b.label||`btn${i}`);
                   btn.setStyle(BStyle.Secondary);
                   btn.setCustomId(`btn:${sid}:${i}`);
@@ -572,32 +538,16 @@ module.exports = {
               c.buttons.slice(0,5).forEach((b,i) => {
                 // For URL buttons with hex, include both a colored proxy (interactive) and a Link button
                 if (b.type === 'url') {
-                  if (b.hex) {
-                    const proxy = new BB().setLabel(b.label||`btn${i}`);
-                    const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
-                    if (hexStyle) proxy.setStyle(hexStyle); else proxy.setStyle(mapButtonStyle(b.style));
-                    proxy.setCustomId(`message_button_tmp:${i}`);
-                    // only add a Link if URL present
-                    if (b.url) {
-                      const link = new BB().setLabel('Abrir').setStyle(BStyle.Link);
-                      try { link.setURL(b.url); } catch {}
-                      r.addComponents(proxy, link);
-                    } else {
-                      r.addComponents(proxy);
-                    }
+                  // create a colored proxy based on chosen style and a Link button for direct navigation
+                  const proxy = new BB().setLabel(b.label||`btn${i}`);
+                  try { proxy.setStyle(mapButtonStyle(b.style)); } catch { proxy.setStyle(BStyle.Secondary); }
+                  proxy.setCustomId(`message_button_tmp:${i}`);
+                  if (b.url) {
+                    const link = new BB().setLabel('Abrir').setStyle(BStyle.Link);
+                    try { link.setURL(b.url); } catch {}
+                    r.addComponents(proxy, link);
                   } else {
-                    if (b.url) {
-                      const btn = new BB().setLabel(b.label||`btn${i}`);
-                      btn.setStyle(BStyle.Link);
-                      try { btn.setURL(b.url); } catch {}
-                      r.addComponents(btn);
-                    } else {
-                      const btn = new BB().setLabel(b.label||`btn${i}`);
-                      btn.setStyle(BStyle.Secondary);
-                      btn.setCustomId(`btn:${sid}:${i}`);
-                      try { btn.setDisabled(true); } catch {}
-                      r.addComponents(btn);
-                    }
+                    r.addComponents(proxy);
                   }
                 } else {
                   const btn = new BB().setLabel(b.label||`btn${i}`);

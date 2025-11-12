@@ -396,44 +396,81 @@ module.exports = {
     }
 
     try {
+      // Prepare the message parts but do NOT send yet — ask the user to confirm first
       const parts = splitMessage(content, 2000);
-      const sendErrors = [];
-      for (let idx = 0; idx < parts.length; idx++) {
-        const p = parts[idx];
-        const allowedMentions = roleIdsSelected && roleIdsSelected.length > 0 ? { roles: roleIdsSelected } : { parse: ['users', 'roles', 'everyone'] };
-        try {
-          console.log(`[say] sending part ${idx+1}/${parts.length} to ${target.id} (allowedMentions=${JSON.stringify(allowedMentions)})`);
-          await target.send({ content: p, allowedMentions });
-        } catch (e) {
-          console.error('[say] failed to send part', idx, e);
-          sendErrors.push({ idx, error: String(e) });
-        }
-      }
-      // If some emojis were removed because the bot can't use them inline, report them ephemerally
-      let replyText = `Mensagem enviada em ${target}${parts.length > 1 ? ` (dividida em ${parts.length} partes)` : ''}`;
-      if (sendErrors && sendErrors.length > 0) {
-        const errList = sendErrors.map(s => `parte ${s.idx+1}: ${s.error}`).join('; ');
-        replyText += `\n\nAviso: falha ao enviar algumas partes: ${errList}`;
-      }
+      const allowedMentions = roleIdsSelected && roleIdsSelected.length > 0 ? { roles: roleIdsSelected } : { parse: ['users', 'roles', 'everyone'] };
+
+      // Build an informational reply explaining what will happen and show Confirm/Cancel
+      let info = `Pronto para enviar em ${target}${parts.length > 1 ? ` (dividida em ${parts.length} partes)` : ''}`;
       if (missingEmojiImages.length > 0) {
         const idsList = missingEmojiImages.map(m => `${m.id}${m.animated ? ' (animado)' : ''}`).join(', ');
-        replyText += `\n\nOs seguintes emojis não puderam ser usados inline e foram removidos: ${idsList}.`; 
+        info += `\n\nAviso: os seguintes emojis foram removidos por não estarem acessíveis: ${idsList}.`;
       }
-      try {
-        if (!interaction.replied) {
-          return await interaction.reply({ content: replyText, ephemeral: true });
-        } else {
-          return await interaction.followUp({ content: replyText, ephemeral: true });
+      info += '\n\nClique em **Enviar** para confirmar ou **Cancelar** para abortar.';
+
+      const confirmBtn = new ButtonBuilder().setCustomId(`say_send:${sid}`).setLabel('Enviar').setStyle(ButtonStyle.Success);
+      const cancelBtn = new ButtonBuilder().setCustomId(`say_cancel:${sid}`).setLabel('Cancelar').setStyle(ButtonStyle.Danger);
+      const confirmPrompt = await interaction.reply({ content: info, components: [new ActionRowBuilder().addComponents(confirmBtn, cancelBtn)], ephemeral: true, fetchReply: true });
+
+      // Collector for the final confirmation
+      const confColl = confirmPrompt.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id, max: 1, time: 2*60*1000 });
+      const conf = await new Promise((resolve) => {
+        confColl.on('collect', async ci => {
+          try { await ci.deferUpdate(); } catch (e) { try { await ci.deferUpdate(); } catch(_){} }
+          resolve(ci);
+        });
+        confColl.on('end', collected => { if (!collected || collected.size === 0) resolve(null); });
+      });
+
+      if (!conf) {
+        try { await interaction.followUp({ content: 'Nenhuma confirmação recebida — operação cancelada.', ephemeral: true }); } catch (e) { console.error('failed to followUp after no confirm', e); }
+        try { await confirmPrompt.edit({ components: [] }); } catch {}
+        return;
+      }
+
+      if (conf.customId && conf.customId.startsWith('say_cancel:')) {
+        try { await interaction.followUp({ content: 'Envio cancelado pelo usuário.', ephemeral: true }); } catch (e) { console.error('failed followUp on cancel', e); }
+        try { await confirmPrompt.edit({ components: [] }); } catch {}
+        return;
+      }
+
+      if (conf.customId && conf.customId.startsWith('say_send:')) {
+        // User confirmed: send all parts now
+        const sendErrors = [];
+        for (let idx = 0; idx < parts.length; idx++) {
+          const p = parts[idx];
+          try {
+            console.log(`[say] sending part ${idx+1}/${parts.length} to ${target.id} (allowedMentions=${JSON.stringify(allowedMentions)})`);
+            await target.send({ content: p, allowedMentions });
+          } catch (e) {
+            console.error('[say] failed to send part', idx, e);
+            sendErrors.push({ idx, error: String(e) });
+          }
         }
-      } catch (e) {
-        console.error('Erro ao responder interação /say:', e);
-        // as a last resort, try to send DM to user
-        try { await interaction.user.send({ content: replyText }); } catch (ee) { /* ignore */ }
+
+        // Build result message
+        let resultText = `Mensagem enviada em ${target}${parts.length > 1 ? ` (dividida em ${parts.length} partes)` : ''}`;
+        if (sendErrors && sendErrors.length > 0) {
+          const errList = sendErrors.map(s => `parte ${s.idx+1}: ${s.error}`).join('; ');
+          resultText += `\n\nAviso: falha ao enviar algumas partes: ${errList}`;
+        }
+        if (missingEmojiImages.length > 0) {
+          const idsList = missingEmojiImages.map(m => `${m.id}${m.animated ? ' (animado)' : ''}`).join(', ');
+          resultText += `\n\nOs seguintes emojis não puderam ser usados inline e foram removidos: ${idsList}.`;
+        }
+
+        try {
+          await interaction.followUp({ content: resultText, ephemeral: true });
+        } catch (e) {
+          console.error('Erro ao responder interação /say após envio:', e);
+          try { await interaction.user.send({ content: resultText }); } catch (ee) { /* ignore */ }
+        }
+        try { await confirmPrompt.edit({ components: [] }); } catch {}
         return;
       }
     } catch (err) {
-      console.error('Erro em /say:', err);
-      return interaction.reply({ content: 'Falha ao enviar a mensagem (verifique permissões do bot).', ephemeral: true });
+      console.error('Erro em /say (confirm flow):', err);
+      return interaction.reply({ content: 'Falha ao preparar/envio da mensagem (verifique permissões do bot).', ephemeral: true });
     }
   }
 };
