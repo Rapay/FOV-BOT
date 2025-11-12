@@ -70,22 +70,42 @@ module.exports = {
       const placeholders = (content.match(/\{role\}/gi) || []).length;
       if (placeholders > 0) {
         // create a RoleSelect menu allowing selecting exactly 'placeholders' roles
-        const roleSelect = new RoleSelectMenuBuilder().setCustomId(`say_role_select:${placeholders}`).setPlaceholder('Selecione os cargos para substituir {role} (ordem importa)').setMinValues(1).setMaxValues(Math.min(placeholders, 25));
+  // require the user to select exactly the number of placeholders (capped to 25)
+  const selectCount = Math.min(placeholders, 25);
+  const roleSelect = new RoleSelectMenuBuilder().setCustomId(`say_role_select:${placeholders}`).setPlaceholder('Selecione os cargos para substituir {role} (ordem importa)').setMinValues(selectCount).setMaxValues(selectCount);
         const row = new ActionRowBuilder().addComponents(roleSelect);
         const prompt = await submitted.reply({ content: `Encontrei ${placeholders} placeholder(s) {role}. Selecione ${placeholders} cargo(s) na ordem em que quer que substituam os placeholders.`, components: [row], ephemeral: true, fetchReply: true });
 
         const coll = prompt.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id, max: 1, time: 5*60*1000 });
         const sel = await new Promise((resolve) => {
-          coll.on('collect', async selI => { try { await selI.deferUpdate(); } catch {} resolve(selI); });
+          coll.on('collect', async selI => {
+            try {
+              // Try to update the prompt immediately to close the select UI (remove components)
+              try { await selI.update({ content: 'Seleção recebida — aplicando cargos...', components: [] }); } catch (updErr) {
+                // fallback to deferUpdate if update isn't possible
+                try { await selI.deferUpdate(); } catch (dErr) { console.error('[say] failed to ack role select', dErr); }
+              }
+            } catch (e) { console.error('[say] role select collect handler error', e); }
+            resolve(selI);
+          });
           coll.on('end', collected => { if (!collected || collected.size === 0) resolve(null); });
         });
         if (!sel) { await submitted.followUp({ content: 'Nenhum cargo selecionado — cancelando.', ephemeral: true }); return; }
-  const roleIds = sel.values || [];
-  // store selected role IDs for allowedMentions later
-  roleIdsSelected = roleIds;
-  // replace each {role} occurrence with corresponding selected role mention
-  let idx = 0;
-  content = content.replace(/\{role\}/gi, () => { const rid = roleIds[idx++] || ''; return rid ? `<@&${rid}>` : '{role}'; });
+        // extract role IDs robustly: RoleSelect interactions may expose a .values array or a .roles cache
+        let roleIds = [];
+        try {
+          if (Array.isArray(sel.values) && sel.values.length > 0) roleIds = sel.values.slice(0);
+          else if (sel.roles && typeof sel.roles === 'object') {
+            // sel.roles can be a Collection
+            try { roleIds = Array.from(sel.roles.values()).map(r => (r && r.id) ? r.id : String(r)); } catch (_) { roleIds = [] ; }
+          }
+        } catch (ex) { console.error('[say] failed to extract role ids from select interaction', ex); roleIds = []; }
+        console.log('[say] role select chosen ids:', roleIds);
+        // store selected role IDs for allowedMentions later
+        roleIdsSelected = roleIds;
+        // replace each {role} occurrence with corresponding selected role mention
+        let idx = 0;
+        content = content.replace(/\{role\}/gi, () => { const rid = roleIds[idx++] || ''; return rid ? `<@&${rid}>` : '{role}'; });
         await submitted.followUp({ content: 'Cargos aplicados no texto. Enviando...', ephemeral: true });
       } else {
         await submitted.reply({ content: 'Recebido — enviando...', ephemeral: true });
