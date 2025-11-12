@@ -324,7 +324,8 @@ module.exports = {
             new BB().setCustomId(`addbtn_style:${sid}:secondary`).setLabel('Secondary').setStyle(BStyle.Secondary),
             new BB().setCustomId(`addbtn_style:${sid}:success`).setLabel('Success').setStyle(BStyle.Success),
             new BB().setCustomId(`addbtn_style:${sid}:danger`).setLabel('Danger').setStyle(BStyle.Danger),
-            new BB().setCustomId(`addbtn_style:${sid}:link`).setLabel('Link').setStyle(BStyle.Link)
+            // Use Secondary style for the chooser entry labeled 'Link' so we don't serialize a Link button without a URL
+            new BB().setCustomId(`addbtn_style:${sid}:link`).setLabel('Link').setStyle(BStyle.Secondary)
           );
           let replyMsg;
           try {
@@ -447,7 +448,8 @@ module.exports = {
             new BB().setCustomId(`btn_url_style:${sid}:secondary`).setLabel('Secondary').setStyle(BStyle.Secondary),
             new BB().setCustomId(`btn_url_style:${sid}:success`).setLabel('Success').setStyle(BStyle.Success),
             new BB().setCustomId(`btn_url_style:${sid}:danger`).setLabel('Danger').setStyle(BStyle.Danger),
-            new BB().setCustomId(`btn_url_style:${sid}:link`).setLabel('Link').setStyle(BStyle.Link)
+            // Use Secondary style for the chooser entry labeled 'Link' so we don't serialize a Link button without a URL
+            new BB().setCustomId(`btn_url_style:${sid}:link`).setLabel('Link').setStyle(BStyle.Secondary)
           );
           const replyMsg = await i.followUp({ content: 'Escolha o estilo do botão (Link ignora cor):', components: [styleRow], ephemeral: true, fetchReply: true });
           const selColl = replyMsg.createMessageComponentCollector({ filter: b => b.user.id === interaction.user.id, max:1, time:2*60*1000 });
