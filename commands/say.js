@@ -232,9 +232,8 @@ module.exports = {
             console.log('[say] emoji selector chosen ids (iterative):', chosen);
             const confirmBtn = new ButtonBuilder().setCustomId(`say_emoji_confirm:${sid}`).setLabel('Confirmar').setStyle(ButtonStyle.Success);
             const cancelBtn = new ButtonBuilder().setCustomId(`say_emoji_cancel:${sid}`).setLabel('Cancelar').setStyle(ButtonStyle.Danger);
-            await submitted.followUp({ content: `Você selecionou ${chosen.length} emoji(s). Confirme para aplicar.`, components: [new ActionRowBuilder().addComponents(confirmBtn, cancelBtn)], ephemeral: true, fetchReply: true });
-            const confirmPrompt = await submitted.fetchReply().catch(()=>null);
-            const confColl = (confirmPrompt || prompt).createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id, max: 1, time: 2*60*1000 });
+            const confirmPrompt = await submitted.followUp({ content: `Você selecionou ${chosen.length} emoji(s). Confirme para aplicar.`, components: [new ActionRowBuilder().addComponents(confirmBtn, cancelBtn)], ephemeral: true, fetchReply: true });
+            const confColl = confirmPrompt.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id, max: 1, time: 2*60*1000 });
             const conf = await new Promise((resolve) => {
               confColl.on('collect', async ci => { try { await ci.deferUpdate(); } catch {} resolve(ci); });
               confColl.on('end', collected => { if (!collected || collected.size === 0) resolve(null); });
@@ -323,9 +322,8 @@ module.exports = {
             console.log('[say] emoji selector chosen ids (iterative):', chosen);
             const confirmBtn = new ButtonBuilder().setCustomId(`say_emoji_confirm:${sid}`).setLabel('Confirmar').setStyle(ButtonStyle.Success);
             const cancelBtn = new ButtonBuilder().setCustomId(`say_emoji_cancel:${sid}`).setLabel('Cancelar').setStyle(ButtonStyle.Danger);
-            await submitted.followUp({ content: `Você selecionou ${chosen.length} emoji(s). Confirme para aplicar.`, components: [new ActionRowBuilder().addComponents(confirmBtn, cancelBtn)], ephemeral: true, fetchReply: true });
-            const confirmPrompt = await submitted.fetchReply().catch(()=>null);
-            const confColl = (confirmPrompt || prompt).createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id, max: 1, time: 2*60*1000 });
+            const confirmPrompt = await submitted.followUp({ content: `Você selecionou ${chosen.length} emoji(s). Confirme para aplicar.`, components: [new ActionRowBuilder().addComponents(confirmBtn, cancelBtn)], ephemeral: true, fetchReply: true });
+            const confColl = confirmPrompt.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id, max: 1, time: 2*60*1000 });
             const conf = await new Promise((resolve) => {
               confColl.on('collect', async ci => { try { await ci.deferUpdate(); } catch {} resolve(ci); });
               confColl.on('end', collected => { if (!collected || collected.size === 0) resolve(null); });

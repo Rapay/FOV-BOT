@@ -313,6 +313,7 @@ module.exports = {
           // Directly open the URL button style chooser and modal (no webhook option)
           // Acknowledge the interaction robustly: prefer deferUpdate, fall back to ephemeral reply
           try {
+            console.log(`[message] addbtn pressed for session ${sid} by ${i.user.id}`);
             if (!i.deferred && !i.replied) await i.deferUpdate();
           } catch (dErr) {
             console.error('[message] deferUpdate failed for addbtn, will attempt reply fallback', dErr);
@@ -328,16 +329,24 @@ module.exports = {
           let replyMsg;
           try {
             replyMsg = await i.followUp({ content: 'Escolha o estilo do botão (Link ignora cor):', components: [styleRow], ephemeral: true, fetchReply: true });
+            console.log('[message] addbtn followUp sent (ephemeral)');
           } catch (fuErr) {
             console.error('[message] followUp failed for addbtn, trying reply fallback', fuErr);
-            try { replyMsg = await i.reply({ content: 'Escolha o estilo do botão (Link ignora cor):', components: [styleRow], ephemeral: true, fetchReply: true }); } catch (repErr) {
+            try {
+              replyMsg = await i.reply({ content: 'Escolha o estilo do botão (Link ignora cor):', components: [styleRow], ephemeral: true, fetchReply: true });
+              console.log('[message] addbtn reply fallback sent (ephemeral)');
+            } catch (repErr) {
               console.error('[message] reply fallback failed for addbtn, sending DM fallback', repErr);
-              try { replyMsg = await interaction.user.send({ content: 'Escolha o estilo do botão (Link ignora cor):', components: [styleRow] }); } catch (dmErr) { console.error('[message] DM fallback also failed for addbtn', dmErr); }
+              try {
+                replyMsg = await interaction.user.send({ content: 'Escolha o estilo do botão (Link ignora cor):', components: [styleRow] });
+                console.log('[message] addbtn DM fallback sent');
+              } catch (dmErr) { console.error('[message] DM fallback also failed for addbtn', dmErr); }
             }
           }
           const selColl = replyMsg?.createMessageComponentCollector ? replyMsg.createMessageComponentCollector({ filter: b => b.user.id === interaction.user.id, max:1, time:2*60*1000 }) : null;
           if (!selColl) {
-            console.error('[message] failed to create selColl for addbtn (no replyMsg)');
+            console.error('[message] failed to create selColl for addbtn (no replyMsg or createMessageComponentCollector unsupported)', { replyMsg: !!replyMsg, replyMsgType: replyMsg?.constructor?.name });
+            try { if (!i.replied) await i.followUp({ content: 'Não foi possível abrir o seletor de estilo (falha no canal). Tente reiniciar a sessão.', ephemeral: true }); } catch(e){}
             return;
           }
           selColl.on('collect', async selI => {
