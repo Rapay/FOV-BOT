@@ -478,20 +478,34 @@ module.exports = {
                 // For URL buttons with a hex color, create two buttons in the preview row:
                 // 1) a colored proxy (interactive) to show the color, and
                 // 2) a Link button that opens the URL directly (so users can still navigate)
-                if (b.type === 'url') {
+                    if (b.type === 'url') {
                   if (b.hex) {
                     const proxy = new BB().setLabel(b.label||`btn${i}`);
                     const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
                     if (hexStyle) proxy.setStyle(hexStyle); else proxy.setStyle(mapButtonStyle(b.style));
                     proxy.setCustomId(`url_preview:${sid}:${i}`);
-                    const link = new BB().setLabel('Abrir').setStyle(BStyle.Link);
-                    try { link.setURL(b.url||''); } catch {}
-                    r.addComponents(proxy, link);
+                    // only create a Link button if we have a valid URL
+                    if (b.url) {
+                      const link = new BB().setLabel('Abrir').setStyle(BStyle.Link);
+                      try { link.setURL(b.url); } catch {}
+                      r.addComponents(proxy, link);
+                    } else {
+                      // no URL: show only the colored proxy in preview
+                      r.addComponents(proxy);
+                    }
                   } else {
-                    const btn = new BB().setLabel(b.label||`btn${i}`);
-                    btn.setStyle(BStyle.Link);
-                    try { btn.setURL(b.url||b.hook||''); } catch {}
-                    r.addComponents(btn);
+                    if (b.url) {
+                      const btn = new BB().setLabel(b.label||`btn${i}`);
+                      btn.setStyle(BStyle.Link);
+                      try { btn.setURL(b.url); } catch {}
+                      r.addComponents(btn);
+                    } else {
+                      // no URL: show a disabled secondary placeholder so preview doesn't error
+                      const btn = new BB().setLabel(b.label||`btn${i}`);
+                      btn.setStyle(BStyle.Secondary);
+                      try { btn.setDisabled(true); } catch {}
+                      r.addComponents(btn);
+                    }
                   }
                 } else {
                   const btn = new BB().setLabel(b.label||`btn${i}`);
@@ -532,14 +546,27 @@ module.exports = {
                     const hexStyle = b.hex ? mapHexToStyle(b.hex) : null;
                     if (hexStyle) proxy.setStyle(hexStyle); else proxy.setStyle(mapButtonStyle(b.style));
                     proxy.setCustomId(`message_button_tmp:${i}`);
-                    const link = new BB().setLabel('Abrir').setStyle(BStyle.Link);
-                    try { link.setURL(b.url||''); } catch {}
-                    r.addComponents(proxy, link);
+                    // only add a Link if URL present
+                    if (b.url) {
+                      const link = new BB().setLabel('Abrir').setStyle(BStyle.Link);
+                      try { link.setURL(b.url); } catch {}
+                      r.addComponents(proxy, link);
+                    } else {
+                      r.addComponents(proxy);
+                    }
                   } else {
-                    const btn = new BB().setLabel(b.label||`btn${i}`);
-                    btn.setStyle(BStyle.Link);
-                    try { btn.setURL(b.url||b.hook||''); } catch {}
-                    r.addComponents(btn);
+                    if (b.url) {
+                      const btn = new BB().setLabel(b.label||`btn${i}`);
+                      btn.setStyle(BStyle.Link);
+                      try { btn.setURL(b.url); } catch {}
+                      r.addComponents(btn);
+                    } else {
+                      const btn = new BB().setLabel(b.label||`btn${i}`);
+                      btn.setStyle(BStyle.Secondary);
+                      btn.setCustomId(`btn:${sid}:${i}`);
+                      try { btn.setDisabled(true); } catch {}
+                      r.addComponents(btn);
+                    }
                   }
                 } else {
                   const btn = new BB().setLabel(b.label||`btn${i}`);
