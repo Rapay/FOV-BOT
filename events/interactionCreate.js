@@ -135,6 +135,19 @@ module.exports = {
           // customId format: message_button_webhook:<sessionId>:<buttonIdx>
           const sessionKey = `${parts[1]}:${parts[2]}`;
           const hooks = client.messageButtonHooks;
+
+          // Ensure logs directory exists and append a synchronous click record so
+          // we have an on-disk trace even if console output is not visible.
+          try {
+            const fs = require('fs');
+            const dir = './logs';
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+            const line = `${new Date().toISOString()} CLICK user=${interaction.user.id} tag=${interaction.user.tag} customId=${interaction.customId} messageId=${interaction.message ? interaction.message.id : 'unknown'} channelId=${interaction.channelId} sessionKey=${sessionKey}\n`;
+            fs.appendFileSync(dir + '/button_clicks.log', line, { encoding: 'utf8' });
+          } catch (e) {
+            console.error('[message_button] failed to write click log', e);
+          }
+
           console.log(`[message_button] clicked sessionKey=${sessionKey}`);
           if (!hooks || !hooks.has(sessionKey)) {
             console.log('[message_button] no hook mapping found for', sessionKey);
