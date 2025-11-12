@@ -129,6 +129,67 @@ module.exports = {
       }
 
       // Message buttons that trigger configured webhooks
+      // Also handle temporary IDs (message_button_tmp:<idx>) in case the message edit
+      // that rewrote tmp IDs to final IDs failed — mapping is persisted, so resolve it.
+      if (id && id.startsWith('message_button_tmp:')) {
+        try {
+          const parts = id.split(':');
+          const btnIdx = parts[1] || parts[1] === '0' ? Number(parts[1]) : null;
+          const sessionKey = `${interaction.message ? interaction.message.id : 'unknown'}:${btnIdx}`;
+
+          // Ensure logs directory exists and append a synchronous click record
+          try {
+            const fs = require('fs');
+            const dir = './logs';
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+            const line = `${new Date().toISOString()} CLICK_TMP user=${interaction.user.id} tag=${interaction.user.tag} customId=${interaction.customId} messageId=${interaction.message ? interaction.message.id : 'unknown'} channelId=${interaction.channelId} sessionKey=${sessionKey}\n`;
+            fs.appendFileSync(dir + '/button_clicks.log', line, { encoding: 'utf8' });
+          } catch (e) { console.error('[message_button] failed to write click log (tmp)', e); }
+
+          console.log(`[message_button_tmp] clicked sessionKey=${sessionKey}`);
+          const hooks = client.messageButtonHooks;
+          if (!hooks || !hooks.has(sessionKey)) {
+            console.log('[message_button_tmp] no hook mapping found for', sessionKey);
+            try { if (!interaction.deferred && !interaction.replied) await interaction.reply({ content: 'Ação não configurada ou expirada.', ephemeral: true }); } catch (e) { console.error('[message_button_tmp] reply failed', e); }
+            return;
+          }
+          const stored = hooks.get(sessionKey);
+          if (!stored) { try { if (!interaction.deferred && !interaction.replied) await interaction.reply({ content: 'Ação inválida.', ephemeral: true }); } catch (e) { console.error('[message_button_tmp] reply failed', e); } return; }
+
+          // Now reuse the same processing as message_button_webhook by falling through to
+          // emulate a message_button_webhook sessionKey. We'll set id to the final form and
+          // continue; to keep code simple we call the same handler logic in-place below.
+          // (we duplicate handling code here to avoid refactoring large blocks)
+          // Acknowledge quickly
+          let acknowledged = false;
+          try { if (!interaction.deferred && !interaction.replied) { await interaction.deferReply({ ephemeral: true }); acknowledged = true; } } catch (e) { console.error('[message_button_tmp] deferReply failed', e); try { if (!interaction.deferred && !interaction.replied) { await interaction.deferUpdate(); acknowledged = true; } } catch (e2) { console.error('[message_button_tmp] deferUpdate failed', e2); } }
+
+          // Process stored mapping
+          if (typeof stored === 'string') {
+            try {
+              const { URL } = require('url'); const https = require('https'); const parsed = new URL(stored);
+              const payload = JSON.stringify({ userId: interaction.user.id, userTag: interaction.user.tag, messageId: interaction.message.id, channelId: interaction.channelId, guildId: interaction.guildId });
+              const options = { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } };
+              const req = https.request(parsed, options, res => {});
+              req.on('error', e => { console.error('Erro ao chamar webhook (tmp):', e); }); req.write(payload); req.end();
+            } catch (err) { console.error('Erro ao executar webhook (tmp):', err); try { if (acknowledged) return await interaction.editReply({ content: 'Falha ao executar a ação do webhook.' }); } catch (e) { console.error('[message_button_tmp] editReply failed', e); } try { return await interaction.followUp({ content: 'Falha ao executar a ação do webhook.', ephemeral: true }); } catch (e) { console.error('[message_button_tmp] followUp failed', e); } }
+            try { if (acknowledged) return await interaction.editReply({ content: 'Ação executada (webhook acionado).' }); } catch (e) { console.error('[message_button_tmp] editReply failed', e); } try { return await interaction.followUp({ content: 'Ação executada (webhook acionado).', ephemeral: true }); } catch (e) { console.error('[message_button_tmp] followUp failed', e); }
+          }
+          if (stored && stored.type === 'url_proxy' && stored.url) {
+            try {
+              const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+              const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Abrir link').setStyle(ButtonStyle.Link).setURL(stored.url));
+              try { if (acknowledged) return await interaction.editReply({ content: 'Clique para abrir o link:', components: [row] }); } catch (e) { console.error('[message_button_tmp] editReply failed', e); }
+              try { return await interaction.followUp({ content: 'Clique para abrir o link:', components: [row], ephemeral: true }); } catch (ee) { console.error('[message_button_tmp] followUp failed', ee); }
+              try { await interaction.deferUpdate(); return await interaction.followUp({ content: 'Clique para abrir o link:', components: [row], ephemeral: true }); } catch (eee) { console.error('[message_button_tmp] fallback deferUpdate+followUp failed', eee); }
+              try { const ch = interaction.channel; if (ch && ch.isTextBased && typeof ch.send === 'function') { await ch.send(`${interaction.user}, aqui está o link: ${stored.url}`); return; } } catch (chErr) { console.error('[message_button_tmp] channel fallback send failed', chErr); }
+            } catch (err) { console.error('Erro ao criar resposta de url_proxy (tmp):', err); try { if (acknowledged) return await interaction.editReply({ content: 'Falha ao abrir link.' }); } catch (e) { console.error('[message_button_tmp] editReply failed', e); } try { return await interaction.followUp({ content: 'Falha ao abrir link.', ephemeral: true }); } catch (e) { console.error('[message_button_tmp] followUp failed', e); } }
+          }
+          try { if (acknowledged) return await interaction.editReply({ content: 'Ação não suportada.' }); } catch (e) { console.error('[message_button_tmp] editReply failed', e); } try { return await interaction.followUp({ content: 'Ação não suportada.', ephemeral: true }); } catch (e) { console.error('[message_button_tmp] followUp failed', e); }
+        } catch (err) { console.error('Erro ao processar message_button_tmp:', err); if (!interaction.replied) try { await interaction.reply({ content: 'Erro ao processar ação.', ephemeral: true }); } catch (e) { console.error('[message_button_tmp] final reply failed', e); } }
+        return;
+      }
+
       if (id && id.startsWith('message_button_webhook:')) {
         try {
           const parts = id.split(':');

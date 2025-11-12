@@ -104,9 +104,18 @@ module.exports = {
         } catch (e) { allEmojis = []; }
         if (!allEmojis || allEmojis.length === 0) allEmojis = Array.from(interaction.client.emojis.cache.values()).slice(0, 25);
         const options = allEmojis.map(e => ({ label: e.name || e.id, value: e.id, description: `ID: ${e.id}`, emoji: { id: e.id, name: e.name, animated: e.animated } }));
-        const select = new StringSelectMenuBuilder().setCustomId(`say_emoji_select:${sid}`).setPlaceholder('Selecione emojis disponíveis...').addOptions(options).setMinValues(Math.min(emojiPlaceholders, options.length)).setMaxValues(Math.min(emojiPlaceholders, options.length));
+        // We'll ask for one emoji at a time so the user can pick the same emoji multiple times if needed.
+        const select = new StringSelectMenuBuilder()
+          .setCustomId(`say_emoji_select:${sid}`)
+          .setPlaceholder('Selecione um emoji (será pedido N vezes)')
+          .addOptions(options)
+          .setMinValues(1)
+          .setMaxValues(1);
         const manualBtn = new ButtonBuilder().setCustomId(`say_fill_emoji:${sid}`).setLabel('Colar IDs/manual').setStyle(ButtonStyle.Secondary);
-        const prompt = await submitted.followUp({ content: `Encontrei ${emojiPlaceholders} placeholder(s) {emoji}. Selecione ${emojiPlaceholders} emoji(s) na lista OR clique em "Colar IDs/manual" para inserir markups/IDs manualmente.`, components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(manualBtn)], ephemeral: true, fetchReply: true });
+  const { ButtonBuilder, ButtonStyle } = require('discord.js');
+  const progressBtn = new ButtonBuilder().setCustomId(`say_progress:${sid}`).setLabel(`0/${emojiPlaceholders}`).setStyle(ButtonStyle.Secondary).setDisabled(true);
+  const progressRow = new ActionRowBuilder().addComponents(progressBtn);
+  const prompt = await submitted.followUp({ content: `Encontrei ${emojiPlaceholders} placeholder(s) {emoji}. Você será solicitado a selecionar ${emojiPlaceholders} emoji(s), um por vez. Ou clique em "Colar IDs/manual" para inserir markups/IDs manualmente.`, components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(manualBtn), progressRow], ephemeral: true, fetchReply: true });
 
         // iterative selection flow: allow picking the same emoji multiple times (one-by-one)
         const chosen = [];
@@ -121,14 +130,16 @@ module.exports = {
               coll.on('end', collected => { if (!collected || collected.size === 0) resolve(null); });
             });
             if (!sel) { aborted = true; break; }
-            if (sel.customId && sel.customId.startsWith('say_emoji_select:')) {
+              if (sel.customId && sel.customId.startsWith('say_emoji_select:')) {
               try { await sel.deferUpdate(); } catch {};
               const id = (sel.values && sel.values[0]) || null;
               if (!id) { aborted = true; break; }
               chosen.push(id);
               // update prompt to show progress
               try {
-                await sel.editReply({ content: `Selecionado ${chosen.length}/${emojiPlaceholders}. Selecione o próximo emoji (ou cancele).`, components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(manualBtn)] });
+                const prog = new ButtonBuilder().setCustomId(`say_progress:${sid}`).setLabel(`${chosen.length}/${emojiPlaceholders}`).setStyle(ButtonStyle.Secondary).setDisabled(true);
+                const progRow = new ActionRowBuilder().addComponents(prog);
+                await sel.editReply({ content: `Selecionado ${chosen.length}/${emojiPlaceholders}. Selecione o próximo emoji (ou cancele).`, components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(manualBtn), progRow] });
                 currentPrompt = await interaction.client.channels.fetch(submitted.channelId).then(ch => ch.messages.fetch(sel.message.id)).catch(()=>currentPrompt);
               } catch (e) { /* ignore */ }
               // continue to next slot
