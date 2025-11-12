@@ -160,7 +160,6 @@ module.exports = {
           .setMinValues(1)
           .setMaxValues(1);
         const manualBtn = new ButtonBuilder().setCustomId(`say_fill_emoji:${sid}`).setLabel('Colar IDs/manual').setStyle(ButtonStyle.Secondary);
-  const { ButtonBuilder, ButtonStyle } = require('discord.js');
   const progressBtn = new ButtonBuilder().setCustomId(`say_progress:${sid}`).setLabel(`0/${emojiPlaceholders}`).setStyle(ButtonStyle.Secondary).setDisabled(true);
   const progressRow = new ActionRowBuilder().addComponents(progressBtn);
   const prompt = await submitted.followUp({ content: `Encontrei ${emojiPlaceholders} placeholder(s) {emoji}. Você será solicitado a selecionar ${emojiPlaceholders} emoji(s), um por vez. Ou clique em "Colar IDs/manual" para inserir markups/IDs manualmente.`, components: [new ActionRowBuilder().addComponents(select), new ActionRowBuilder().addComponents(manualBtn), progressRow], ephemeral: true, fetchReply: true });
@@ -231,7 +230,6 @@ module.exports = {
           // Ask for final confirmation before applying chosen emojis
           try {
             console.log('[say] emoji selector chosen ids (iterative):', chosen);
-            const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
             const confirmBtn = new ButtonBuilder().setCustomId(`say_emoji_confirm:${sid}`).setLabel('Confirmar').setStyle(ButtonStyle.Success);
             const cancelBtn = new ButtonBuilder().setCustomId(`say_emoji_cancel:${sid}`).setLabel('Cancelar').setStyle(ButtonStyle.Danger);
             await submitted.followUp({ content: `Você selecionou ${chosen.length} emoji(s). Confirme para aplicar.`, components: [new ActionRowBuilder().addComponents(confirmBtn, cancelBtn)], ephemeral: true, fetchReply: true });
@@ -323,7 +321,6 @@ module.exports = {
           // Ask for final confirmation before applying chosen emojis
           try {
             console.log('[say] emoji selector chosen ids (iterative):', chosen);
-            const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
             const confirmBtn = new ButtonBuilder().setCustomId(`say_emoji_confirm:${sid}`).setLabel('Confirmar').setStyle(ButtonStyle.Success);
             const cancelBtn = new ButtonBuilder().setCustomId(`say_emoji_cancel:${sid}`).setLabel('Cancelar').setStyle(ButtonStyle.Danger);
             await submitted.followUp({ content: `Você selecionou ${chosen.length} emoji(s). Confirme para aplicar.`, components: [new ActionRowBuilder().addComponents(confirmBtn, cancelBtn)], ephemeral: true, fetchReply: true });
