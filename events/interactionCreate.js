@@ -239,6 +239,18 @@ module.exports = {
               } catch (eee) {
                 console.error('[message_button] fallback deferUpdate+followUp failed', eee);
               }
+
+              // Final fallback: if we still couldn't reply ephemerally, send a plain
+              // message in the channel with the link so the user can access it.
+              try {
+                const ch = interaction.channel;
+                if (ch && ch.isTextBased && typeof ch.send === 'function') {
+                  await ch.send(`${interaction.user}, aqui está o link: ${stored.url}`);
+                  return;
+                }
+              } catch (chErr) {
+                console.error('[message_button] channel fallback send failed', chErr);
+              }
             } catch (err) {
               console.error('Erro ao criar resposta de url_proxy:', err);
               try { if (acknowledged) return await interaction.editReply({ content: 'Falha ao abrir link.' }); } catch (e) { console.error('[message_button] editReply failed', e); }
