@@ -100,19 +100,21 @@ module.exports = {
             try { roleIds = Array.from(sel.roles.values()).map(r => (r && r.id) ? r.id : String(r)); } catch (_) { roleIds = [] ; }
           }
         } catch (ex) { console.error('[say] failed to extract role ids from select interaction', ex); roleIds = []; }
-        console.log('[say] role select chosen ids:', roleIds);
+  console.log('[say] role select chosen ids:', roleIds);
         // store selected role IDs for allowedMentions later
         roleIdsSelected = roleIds;
         // replace each {role} occurrence with corresponding selected role mention
         let idx = 0;
         content = content.replace(/\{role\}/gi, () => { const rid = roleIds[idx++] || ''; return rid ? `<@&${rid}>` : '{role}'; });
-        await submitted.followUp({ content: 'Cargos aplicados no texto. Enviando...', ephemeral: true });
+  try { await submitted.followUp({ content: 'Cargos aplicados no texto. Enviando...', ephemeral: true }); } catch (e) { console.error('[say] failed to followUp after role apply', e); }
+  console.log('[say] content after role replacement:', content.slice(0, 300));
       } else {
         await submitted.reply({ content: 'Recebido — enviando...', ephemeral: true });
       }
 
       // If user included {emoji} placeholders, offer a select of bot-accessible emojis and a manual paste fallback
-      const emojiPlaceholders = (content.match(/\{emoji\}/gi) || []).length;
+  const emojiPlaceholders = (content.match(/\{emoji\}/gi) || []).length;
+  console.log('[say] emojiPlaceholders count:', emojiPlaceholders);
       if (emojiPlaceholders > 0) {
         // build select options from emojis in the target guild (Option A)
         // fallback to client cache if target guild has no emojis or is a DM
