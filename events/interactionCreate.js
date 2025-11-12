@@ -151,10 +151,28 @@ module.exports = {
             return;
           }
 
+          // Debug: log stored hook value
+          try { console.log('[message_button] stored hook:', JSON.stringify(stored)); } catch (e) { console.log('[message_button] stored hook (raw):', stored); }
+
           // Acknowledge the interaction quickly to avoid "This interaction failed".
+          let acknowledged = false;
           try {
-            if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ ephemeral: true });
-          } catch (e) { console.error('[message_button] deferReply failed', e); }
+            if (!interaction.deferred && !interaction.replied) {
+              await interaction.deferReply({ ephemeral: true });
+              acknowledged = true;
+            }
+          } catch (e) {
+            console.error('[message_button] deferReply failed', e);
+            // Try deferUpdate as a lighter-weight ack for component interactions
+            try {
+              if (!interaction.deferred && !interaction.replied) {
+                await interaction.deferUpdate();
+                acknowledged = true;
+              }
+            } catch (e2) {
+              console.error('[message_button] deferUpdate also failed', e2);
+            }
+          }
 
           // If stored is a string, treat it as a webhook URL (legacy)
           if (typeof stored === 'string') {
@@ -172,9 +190,12 @@ module.exports = {
               req.end();
             } catch (err) {
               console.error('Erro ao executar webhook:', err);
-              try { return await interaction.editReply({ content: 'Falha ao executar a ação do webhook.' }); } catch (e) { console.error('[message_button] editReply failed', e); }
+              // Try to inform the user via editReply -> followUp -> channel send
+              try { if (acknowledged) return await interaction.editReply({ content: 'Falha ao executar a ação do webhook.' }); } catch (e) { console.error('[message_button] editReply failed', e); }
+              try { return await interaction.followUp({ content: 'Falha ao executar a ação do webhook.', ephemeral: true }); } catch (e) { console.error('[message_button] followUp failed', e); }
             }
-            try { return await interaction.editReply({ content: 'Ação executada (webhook acionado).' }); } catch (e) { console.error('[message_button] editReply failed', e); }
+            try { if (acknowledged) return await interaction.editReply({ content: 'Ação executada (webhook acionado).' }); } catch (e) { console.error('[message_button] editReply failed', e); }
+            try { return await interaction.followUp({ content: 'Ação executada (webhook acionado).', ephemeral: true }); } catch (e) { console.error('[message_button] followUp failed', e); }
           }
 
           // If stored is an object indicating a url_proxy, reply ephemeral with a Link button
@@ -183,14 +204,36 @@ module.exports = {
               console.log('[message_button] url_proxy click, sending ephemeral link');
               const { ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
               const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel('Abrir link').setStyle(ButtonStyle.Link).setURL(stored.url));
-              try { return await interaction.editReply({ content: 'Clique para abrir o link:', components: [row] }); } catch (e) { console.error('[message_button] editReply failed', e); try { return await interaction.followUp({ content: 'Clique para abrir o link:', components: [row], ephemeral: true }); } catch (ee) { console.error('[message_button] followUp failed', ee); } }
+
+              // Try to edit the deferred reply first (fastest, keeps it ephemeral)
+              try {
+                if (acknowledged) return await interaction.editReply({ content: 'Clique para abrir o link:', components: [row] });
+              } catch (e) {
+                console.error('[message_button] editReply failed', e);
+              }
+
+              // fallback to followUp (ephemeral)
+              try {
+                return await interaction.followUp({ content: 'Clique para abrir o link:', components: [row], ephemeral: true });
+              } catch (ee) {
+                console.error('[message_button] followUp failed', ee);
+              }
+
+              // As a last resort, try to acknowledge via deferUpdate then followUp
+              try {
+                await interaction.deferUpdate();
+                return await interaction.followUp({ content: 'Clique para abrir o link:', components: [row], ephemeral: true });
+              } catch (eee) {
+                console.error('[message_button] fallback deferUpdate+followUp failed', eee);
+              }
             } catch (err) {
               console.error('Erro ao criar resposta de url_proxy:', err);
-                try { return await interaction.editReply({ content: 'Falha ao abrir link.' }); } catch (e) { console.error('[message_button] editReply failed', e); }
+              try { if (acknowledged) return await interaction.editReply({ content: 'Falha ao abrir link.' }); } catch (e) { console.error('[message_button] editReply failed', e); }
+              try { return await interaction.followUp({ content: 'Falha ao abrir link.', ephemeral: true }); } catch (e) { console.error('[message_button] followUp failed', e); }
             }
           }
-
-            try { return await interaction.editReply({ content: 'Ação não suportada.' }); } catch (e) { console.error('[message_button] editReply failed', e); }
+            try { if (acknowledged) return await interaction.editReply({ content: 'Ação não suportada.' }); } catch (e) { console.error('[message_button] editReply failed', e); }
+            try { return await interaction.followUp({ content: 'Ação não suportada.', ephemeral: true }); } catch (e) { console.error('[message_button] followUp failed', e); }
         } catch (err) {
           console.error('Erro ao processar message_button_webhook:', err);
           if (!interaction.replied) try { await interaction.reply({ content: 'Erro ao processar ação.', ephemeral: true }); } catch (e) { console.error('[message_button] final reply failed', e); }
