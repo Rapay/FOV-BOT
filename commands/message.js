@@ -132,6 +132,7 @@ module.exports = {
 
     const coll = panel.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id, time: 10*60*1000 });
     coll.on('collect', async i => {
+      try { console.log(`[message] component collected: customId=${i.customId} user=${i.user.id}`); } catch (e) {}
       try {
         const [act, k] = i.customId.split(':');
         if (k !== sid) return i.reply({ content: 'Sessão inválida', ephemeral: true });
@@ -310,7 +311,13 @@ module.exports = {
         if (act === 'addbtn') {
           if (!session.container) return i.reply({ content: 'Crie o container primeiro.', ephemeral: true });
           // Directly open the URL button style chooser and modal (no webhook option)
-          try { await i.deferUpdate(); } catch {}
+          // Acknowledge the interaction robustly: prefer deferUpdate, fall back to ephemeral reply
+          try {
+            if (!i.deferred && !i.replied) await i.deferUpdate();
+          } catch (dErr) {
+            console.error('[message] deferUpdate failed for addbtn, will attempt reply fallback', dErr);
+            try { if (!i.replied) await i.reply({ content: 'Abrindo escolha de estilo...', ephemeral: true }); } catch (rErr) { console.error('[message] reply fallback also failed for addbtn', rErr); }
+          }
           const styleRow = new ARB().addComponents(
             new BB().setCustomId(`addbtn_style:${sid}:primary`).setLabel('Primary').setStyle(BStyle.Primary),
             new BB().setCustomId(`addbtn_style:${sid}:secondary`).setLabel('Secondary').setStyle(BStyle.Secondary),
@@ -318,8 +325,21 @@ module.exports = {
             new BB().setCustomId(`addbtn_style:${sid}:danger`).setLabel('Danger').setStyle(BStyle.Danger),
             new BB().setCustomId(`addbtn_style:${sid}:link`).setLabel('Link').setStyle(BStyle.Link)
           );
-          const replyMsg = await i.followUp({ content: 'Escolha o estilo do botão (Link ignora cor):', components: [styleRow], ephemeral: true, fetchReply: true });
-          const selColl = replyMsg.createMessageComponentCollector({ filter: b => b.user.id === interaction.user.id, max:1, time:2*60*1000 });
+          let replyMsg;
+          try {
+            replyMsg = await i.followUp({ content: 'Escolha o estilo do botão (Link ignora cor):', components: [styleRow], ephemeral: true, fetchReply: true });
+          } catch (fuErr) {
+            console.error('[message] followUp failed for addbtn, trying reply fallback', fuErr);
+            try { replyMsg = await i.reply({ content: 'Escolha o estilo do botão (Link ignora cor):', components: [styleRow], ephemeral: true, fetchReply: true }); } catch (repErr) {
+              console.error('[message] reply fallback failed for addbtn, sending DM fallback', repErr);
+              try { replyMsg = await interaction.user.send({ content: 'Escolha o estilo do botão (Link ignora cor):', components: [styleRow] }); } catch (dmErr) { console.error('[message] DM fallback also failed for addbtn', dmErr); }
+            }
+          }
+          const selColl = replyMsg?.createMessageComponentCollector ? replyMsg.createMessageComponentCollector({ filter: b => b.user.id === interaction.user.id, max:1, time:2*60*1000 }) : null;
+          if (!selColl) {
+            console.error('[message] failed to create selColl for addbtn (no replyMsg)');
+            return;
+          }
           selColl.on('collect', async selI => {
             try {
               const parts = selI.customId.split(':');
