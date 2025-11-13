@@ -431,11 +431,59 @@ module.exports = {
     const command = client.commands.get(interaction.commandName);
     if (!command) return interaction.reply({ content: 'Comando não encontrado.', ephemeral: true });
 
+    // Intercept ephemeral replies/followUps to be able to delete them automatically
+    const ephemeralMessages = [];
+    const originalReply = interaction.reply.bind(interaction);
+    const originalFollowUp = interaction.followUp ? interaction.followUp.bind(interaction) : null;
+
+    const wrap = (orig) => {
+      return async (options) => {
+        try {
+          if (options && typeof options === 'object' && options.ephemeral) {
+            // ensure we fetch the reply so we can delete it later
+            options.fetchReply = true;
+            const m = await orig(options);
+            try { if (m) ephemeralMessages.push(m); } catch (e) { /* ignore */ }
+            return m;
+          }
+        } catch (e) {
+          // continue to fallback to original behavior
+        }
+        return await orig(options);
+      };
+    };
+
+    // Patch interaction methods for this execution
+    interaction.reply = wrap(originalReply);
+    if (originalFollowUp) interaction.followUp = wrap(originalFollowUp);
+
     try {
       await command.execute(interaction);
     } catch (err) {
       console.error('Erro ao executar comando:', err);
-      if (!interaction.replied) await interaction.reply({ content: 'Ocorreu um erro ao executar o comando.', ephemeral: true });
+      try {
+        if (!interaction.replied) await originalReply({ content: 'Ocorreu um erro ao executar o comando.', ephemeral: true, fetchReply: true });
+      } catch (e) { console.error('Erro ao notificar erro ao usuário:', e); }
     }
+
+    // Attempt to delete any ephemeral messages created during command execution
+    for (const m of ephemeralMessages) {
+      try {
+        if (!m) continue;
+        // prefer message.delete() when available
+        if (typeof m.delete === 'function') {
+          await m.delete().catch(()=>{});
+          continue;
+        }
+      } catch (e) { /* ignore */ }
+      try {
+        // fallback: try to delete original interaction reply
+        if (typeof interaction.deleteReply === 'function') await interaction.deleteReply().catch(()=>{});
+      } catch (e) { /* ignore */ }
+    }
+
+    // restore original methods to avoid side-effects
+    try { interaction.reply = originalReply; } catch (e) {}
+    try { if (originalFollowUp) interaction.followUp = originalFollowUp; } catch (e) {}
   }
 };
