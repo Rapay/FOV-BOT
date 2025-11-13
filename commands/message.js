@@ -304,67 +304,27 @@ module.exports = {
         
         if (act === 'addbtn') {
           if (!session.container) return i.reply({ content: 'Crie o container primeiro.', ephemeral: true });
-          // Directly open the URL button style chooser and modal (no webhook option)
-          // Acknowledge the interaction robustly: prefer deferUpdate, fall back to ephemeral reply
           try {
             console.log(`[message] addbtn pressed for session ${sid} by ${i.user.id}`);
             if (!i.deferred && !i.replied) await i.deferUpdate();
           } catch (dErr) {
-            console.error('[message] deferUpdate failed for addbtn, will attempt reply fallback', dErr);
-            try { if (!i.replied) await i.reply({ content: 'Abrindo escolha de estilo...', ephemeral: true }); } catch (rErr) { console.error('[message] reply fallback also failed for addbtn', rErr); }
+            console.error('[message] deferUpdate failed for addbtn', dErr);
+            try { if (!i.replied) await i.reply({ content: 'Abrindo modal...', ephemeral: true }); } catch (rErr) { console.error('[message] reply fallback also failed for addbtn', rErr); }
           }
-          const styleRow = new ARB().addComponents(
-            new BB().setCustomId(`addbtn_style:${sid}:primary`).setLabel('Primary').setStyle(BStyle.Primary),
-            new BB().setCustomId(`addbtn_style:${sid}:secondary`).setLabel('Secondary').setStyle(BStyle.Secondary),
-            new BB().setCustomId(`addbtn_style:${sid}:success`).setLabel('Success').setStyle(BStyle.Success),
-            new BB().setCustomId(`addbtn_style:${sid}:danger`).setLabel('Danger').setStyle(BStyle.Danger),
-            // Use Secondary style for the chooser entry labeled 'Link' so we don't serialize a Link button without a URL
-            new BB().setCustomId(`addbtn_style:${sid}:link`).setLabel('Link').setStyle(BStyle.Secondary)
-          );
-          let replyMsg;
+          // Directly open modal to collect label and URL (no color/style options)
           try {
-            replyMsg = await i.followUp({ content: 'Escolha o estilo do botão (Link ignora cor):', components: [styleRow], ephemeral: true, fetchReply: true });
-            console.log('[message] addbtn followUp sent (ephemeral)');
-          } catch (fuErr) {
-            console.error('[message] followUp failed for addbtn, trying reply fallback', fuErr);
-            try {
-              replyMsg = await i.reply({ content: 'Escolha o estilo do botão (Link ignora cor):', components: [styleRow], ephemeral: true, fetchReply: true });
-              console.log('[message] addbtn reply fallback sent (ephemeral)');
-            } catch (repErr) {
-              console.error('[message] reply fallback failed for addbtn, sending DM fallback', repErr);
-              try {
-                replyMsg = await interaction.user.send({ content: 'Escolha o estilo do botão (Link ignora cor):', components: [styleRow] });
-                console.log('[message] addbtn DM fallback sent');
-              } catch (dmErr) { console.error('[message] DM fallback also failed for addbtn', dmErr); }
-            }
-          }
-          const selColl = replyMsg?.createMessageComponentCollector ? replyMsg.createMessageComponentCollector({ filter: b => b.user.id === interaction.user.id, max:1, time:2*60*1000 }) : null;
-          if (!selColl) {
-            console.error('[message] failed to create selColl for addbtn (no replyMsg or createMessageComponentCollector unsupported)', { replyMsg: !!replyMsg, replyMsgType: replyMsg?.constructor?.name });
-            try { if (!i.replied) await i.followUp({ content: 'Não foi possível abrir o seletor de estilo (falha no canal). Tente reiniciar a sessão.', ephemeral: true }); } catch(e){}
-            return;
-          }
-          selColl.on('collect', async selI => {
-            try {
-              const parts = selI.customId.split(':');
-              const chosen = parts[2] || 'primary';
-              // open modal to collect label/url/hex
-              const modal = new MB().setCustomId(`modal_btn_url:${sid}`).setTitle('Botão URL');
-              modal.addComponents(
-                new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)),
-                new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true))
-              );
-              await selI.showModal(modal);
-              try {
-                const sub = await selI.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id });
-                session.container.buttons = session.container.buttons||[];
-                const styleName = (chosen === 'link') ? 'Link' : (chosen.charAt(0).toUpperCase() + chosen.slice(1));
-                session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url'), style: styleName });
-                await sub.reply({ content:'Botão URL adicionado.', ephemeral:true });
-                await refresh();
-              } catch {}
-            } catch (err) { console.error('addbtn style select err', err); }
-          });
+            const modal = new MB().setCustomId(`modal_btn_url:${sid}`).setTitle('Botão URL');
+            modal.addComponents(
+              new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)),
+              new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true))
+            );
+            await i.showModal(modal);
+            const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id });
+            session.container.buttons = session.container.buttons||[];
+            session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url') });
+            await sub.reply({ content:'Botão URL adicionado.', ephemeral:true });
+            await refresh();
+          } catch (err) { console.error('addbtn modal error', err); try { await i.followUp({ content: 'Erro ao adicionar botão.', ephemeral: true }); } catch {} }
           return;
         }
 
@@ -426,58 +386,30 @@ module.exports = {
           } catch (err) { console.error('managebtns err', err); return i.reply({ content: 'Erro ao abrir gerenciador.', ephemeral: true }); }
         }
 
-        if (act === 'btn_url') {
-          // Ask user to choose a style first via ephemeral buttons, then open modal to collect label/url/hex
-          try { await i.deferUpdate(); } catch {}
-          const styleRow = new ARB().addComponents(
-            new BB().setCustomId(`btn_url_style:${sid}:primary`).setLabel('Primary').setStyle(BStyle.Primary),
-            new BB().setCustomId(`btn_url_style:${sid}:secondary`).setLabel('Secondary').setStyle(BStyle.Secondary),
-            new BB().setCustomId(`btn_url_style:${sid}:success`).setLabel('Success').setStyle(BStyle.Success),
-            new BB().setCustomId(`btn_url_style:${sid}:danger`).setLabel('Danger').setStyle(BStyle.Danger),
-            // Use Secondary style for the chooser entry labeled 'Link' so we don't serialize a Link button without a URL
-            new BB().setCustomId(`btn_url_style:${sid}:link`).setLabel('Link').setStyle(BStyle.Secondary)
-          );
-          const replyMsg = await i.followUp({ content: 'Escolha o estilo do botão (Link ignora cor):', components: [styleRow], ephemeral: true, fetchReply: true });
-          const selColl = replyMsg.createMessageComponentCollector({ filter: b => b.user.id === interaction.user.id, max:1, time:2*60*1000 });
-          selColl.on('collect', async selI => {
-            try {
-              const parts = selI.customId.split(':');
-              const chosen = parts[2] || 'primary';
-              // open modal to collect label/url/hex
-              const modal = new MB().setCustomId(`modal_btn_url:${sid}`).setTitle('Botão URL');
-              modal.addComponents(
-                new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)),
-                new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true)),
-                new ARB().addComponents(new TIB().setCustomId('b_hex').setLabel('Hex do botão (opcional, ex: #ff0000)').setStyle(TIS.Short).setRequired(false))
-              );
-              await selI.showModal(modal);
-              try {
-                const sub = await selI.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id });
-                session.container.buttons = session.container.buttons||[];
-                const rawHex = sub.fields.getTextInputValue('b_hex') || null;
-                const hex = normalizeHexColor(rawHex);
-                const styleName = (chosen === 'link') ? 'Link' : (chosen.charAt(0).toUpperCase() + chosen.slice(1));
-                session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url'), style: styleName, hex });
-                if (hex) session.container.color = hex;
-                await sub.reply({ content:'Botão URL adicionado.', ephemeral:true });
-                await refresh();
-              } catch {}
-            } catch (err) { console.error('btn_url style select err', err); }
-          });
-          session.awaitingButtonType = false;
-          return;
-        }
+        
 
         // webhook option removed
 
-        if (act === 'done') {
-          try { await i.reply({ content: 'Concluído.', ephemeral: true }); } catch {}
+        if (act === 'btn_url') {
+          if (!session.container) return i.reply({ content: 'Crie o container primeiro.', ephemeral: true });
+          try { if (!i.deferred && !i.replied) await i.deferUpdate(); } catch {}
+          try {
+            const modal = new MB().setCustomId(`modal_btn_url:${sid}`).setTitle('Botão URL');
+            modal.addComponents(
+              new ARB().addComponents(new TIB().setCustomId('lbl').setLabel('Rótulo').setStyle(TIS.Short).setRequired(true)),
+              new ARB().addComponents(new TIB().setCustomId('url').setLabel('URL').setStyle(TIS.Short).setRequired(true))
+            );
+            await i.showModal(modal);
+            const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id });
+            session.container.buttons = session.container.buttons||[];
+            session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url') });
+            await sub.reply({ content:'Botão URL adicionado.', ephemeral:true });
+            await refresh();
+          } catch (err) { console.error('btn_url modal err', err); }
           session.awaitingButtonType = false;
-          await refresh();
           return;
         }
 
-        if (act === 'clear') { session.container = null; await i.reply({ content: 'Container limpo.', ephemeral: true }); await refresh(); return; }
         if (act === 'preview') {
           if (!session.container) return i.reply({ content: 'Nenhum container.', ephemeral: true });
           try {
@@ -492,19 +424,18 @@ module.exports = {
             if (c.buttons && c.buttons.length) {
               const r = new ARB();
               c.buttons.slice(0,5).forEach((b,i) => {
-                    if (b.type === 'url') {
-                    // Always create a colored proxy button (reflecting the chosen style) and a Link button for navigation
-                    const proxy = new BB().setLabel(b.label||`btn${i}`);
-                    try { proxy.setStyle(mapButtonStyle(b.style)); } catch { proxy.setStyle(BStyle.Secondary); }
-                    proxy.setCustomId(`url_preview:${sid}:${i}`);
-                    if (b.url) {
-                      const link = new BB().setLabel('Abrir').setStyle(BStyle.Link);
-                      try { link.setURL(b.url); } catch {}
-                      r.addComponents(proxy, link);
-                    } else {
-                      r.addComponents(proxy);
-                    }
+                if (b.type === 'url') {
+                  if (b.url) {
+                    const btn = new BB().setLabel(b.label||`btn${i}`).setStyle(BStyle.Link);
+                    try { btn.setURL(b.url); } catch {}
+                    r.addComponents(btn);
                   } else {
+                    const btn = new BB().setLabel(b.label||`btn${i}`);
+                    btn.setStyle(BStyle.Secondary);
+                    try { btn.setDisabled(true); } catch {}
+                    r.addComponents(btn);
+                  }
+                } else {
                   const btn = new BB().setLabel(b.label||`btn${i}`);
                   btn.setStyle(BStyle.Secondary);
                   btn.setCustomId(`btn:${sid}:${i}`);
@@ -536,18 +467,16 @@ module.exports = {
             if (c.buttons && c.buttons.length) {
               const r = new ARB();
               c.buttons.slice(0,5).forEach((b,i) => {
-                // For URL buttons with hex, include both a colored proxy (interactive) and a Link button
                 if (b.type === 'url') {
-                  // create a colored proxy based on chosen style and a Link button for direct navigation
-                  const proxy = new BB().setLabel(b.label||`btn${i}`);
-                  try { proxy.setStyle(mapButtonStyle(b.style)); } catch { proxy.setStyle(BStyle.Secondary); }
-                  proxy.setCustomId(`message_button_tmp:${i}`);
                   if (b.url) {
-                    const link = new BB().setLabel('Abrir').setStyle(BStyle.Link);
-                    try { link.setURL(b.url); } catch {}
-                    r.addComponents(proxy, link);
+                    const btn = new BB().setLabel(b.label||`btn${i}`).setStyle(BStyle.Link);
+                    try { btn.setURL(b.url); } catch {}
+                    r.addComponents(btn);
                   } else {
-                    r.addComponents(proxy);
+                    const btn = new BB().setLabel(b.label||`btn${i}`);
+                    btn.setStyle(BStyle.Secondary);
+                    try { btn.setDisabled(true); } catch {}
+                    r.addComponents(btn);
                   }
                 } else {
                   const btn = new BB().setLabel(b.label||`btn${i}`);
@@ -561,65 +490,7 @@ module.exports = {
 
             const sent = await ch.send({ embeds:[e], components:comps });
 
-            // For webhook buttons: persist mapping and update message components to final customIds
-            if (sent && c.buttons && c.buttons.length) {
-              // load current components, replace tmp ids with message_button_webhook:<messageId>:<idx>
-              try {
-                const newRows = [];
-                const failedPersist = [];
-                const fs = require('fs');
-                const path = require('path');
-                const dbPath = path.join(__dirname, '..', 'data', 'message_buttons.json');
-                for (const row of sent.components) {
-                  const newRow = ARB.from(row);
-                  const comps = newRow.components.map((comp) => {
-                    if (comp.customId && comp.customId.startsWith('message_button_tmp:')) {
-                      const btnIdx = Number(comp.customId.split(':')[1]);
-                      const finalId = `message_button_webhook:${sent.id}:${btnIdx}`;
-                      const nb = BB.from(comp).setCustomId(finalId);
-                      // persist mapping for url-proxy (only URL buttons are supported now)
-                      const btnInfo = c.buttons[btnIdx];
-                      try {
-                        if (btnInfo && btnInfo.type === 'url' && btnInfo.url) {
-                          // store as an object to indicate this is a url-proxy mapping
-                          const val = { type: 'url_proxy', url: btnInfo.url };
-                          saveHook(`${sent.id}:${btnIdx}`, val);
-                          console.log('[message] saved hook mapping', `${sent.id}:${btnIdx}`, JSON.stringify(val));
-                        }
-
-                        // verify persistence immediately (best-effort) without awaiting inside map
-                        try {
-                          if (fs.existsSync(dbPath)) {
-                            const raw = fs.readFileSync(dbPath, 'utf8') || '{}';
-                            const obj = JSON.parse(raw || '{}');
-                            const k = `${sent.id}:${btnIdx}`;
-                            if (!Object.prototype.hasOwnProperty.call(obj, k)) {
-                              console.error('[message] saveHook verification FAILED for', k);
-                              failedPersist.push({ key: k, idx: btnIdx });
-                            }
-                          }
-                        } catch (verr) { console.error('[message] saveHook verification error', verr); }
-                      } catch (e) { console.error('saveHook mapping error', e); }
-                      return nb;
-                    }
-                    return comp;
-                  });
-                  // recreate the row with replaced components
-                  const rebuilt = new ARB().addComponents(...comps);
-                  newRows.push(rebuilt);
-                }
-                // If we detected failed persistence, notify the command issuer after edit
-                try {
-                  await sent.edit({ components: newRows });
-                } catch (e) { console.error('Failed to rewrite webhook button IDs', e); }
-                if (failedPersist.length > 0) {
-                  try {
-                    const keys = failedPersist.map(f => f.key).join(', ');
-                    try { await interaction.followUp({ content: `Aviso: falha ao persistir ações para botões: ${keys}. Entrarei em fallback.`, ephemeral: true }); } catch (e) { try { await interaction.user.send(`Aviso: falha ao persistir ações para botões: ${keys} na mensagem ${sent.id}.`); } catch {} }
-                  } catch (e) { console.error('[message] failed to notify about failedPersist', e); }
-                }
-              } catch (e) { console.error('Failed to rewrite webhook button IDs', e); }
-            }
+            // No persistence rewrite needed: buttons are Link buttons (no customIds to replace)
 
             await i.reply({ content:'Mensagem enviada.', ephemeral:true }); coll.stop('sent');
           } catch (err) { console.error('send err', err); await i.reply({ content:'Erro ao enviar.', ephemeral:true }); }
