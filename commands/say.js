@@ -53,6 +53,67 @@ module.exports = {
     const sid = `${Date.now()}-${Math.floor(Math.random()*10000)}`;
   // will store role IDs selected to replace {role} placeholders (keeps mention control)
   let roleIdsSelected = null;
+    // helper: prepare & send the final content (handles emoji accessibility, splitting, allowedMentions)
+    async function sendFinalAndRespond() {
+      try {
+        // === handle custom emojis that the bot cannot use directly ===
+        const emojiRegex = /<(a)?:[A-Za-z0-9_]+:(\d+)>/g;
+        let emMatch;
+        const foundEmojis = new Map(); // id -> { animated }
+        while ((emMatch = emojiRegex.exec(content)) !== null) {
+          const animated = !!emMatch[1];
+          const id = emMatch[2];
+          if (!foundEmojis.has(id)) foundEmojis.set(id, { animated });
+        }
+
+        const missingEmojiImages = []; // array of {id, animated}
+        for (const [id, info] of foundEmojis.entries()) {
+          let accessible = false;
+          try {
+            const cached = interaction.client.emojis.cache.get(id);
+            if (cached) {
+              const emojiGuildId = cached.guildId || (cached.guild ? cached.guild.id : null);
+              if (!emojiGuildId) accessible = false;
+              else if (target && target.guild && target.guild.id === emojiGuildId) accessible = true;
+              else if (interaction.client.guilds.cache.has(emojiGuildId)) accessible = true;
+              else accessible = false;
+            } else {
+              accessible = false;
+            }
+          } catch (e) { accessible = false; }
+          if (!accessible) {
+            const markupRe = new RegExp(`<a?:[A-Za-z0-9_]+:${id}>`, 'g');
+            content = content.replace(markupRe, '');
+            missingEmojiImages.push({ id, animated: info.animated });
+          }
+        }
+
+        const parts = splitMessage(content, 2000);
+        const allowedMentions = roleIdsSelected && roleIdsSelected.length > 0 ? { roles: roleIdsSelected } : { parse: ['users', 'roles', 'everyone'] };
+
+        // send parts
+        const sendErrors = [];
+        for (let idx = 0; idx < parts.length; idx++) {
+          const p = parts[idx];
+          try {
+            console.log(`[say] sending part ${idx+1}/${parts.length} to ${target.id} (allowedMentions=${JSON.stringify(allowedMentions)})`);
+            await target.send({ content: p, allowedMentions });
+          } catch (e) { console.error('[say] failed to send part', idx, e); sendErrors.push({ idx, error: String(e) }); }
+        }
+
+        let resultText = `Mensagem enviada em ${target}${parts.length > 1 ? ` (dividida em ${parts.length} partes)` : ''}`;
+        if (sendErrors && sendErrors.length > 0) {
+          const errList = sendErrors.map(s => `parte ${s.idx+1}: ${s.error}`).join('; ');
+          resultText += `\n\nAviso: falha ao enviar algumas partes: ${errList}`;
+        }
+        if (missingEmojiImages.length > 0) {
+          const idsList = missingEmojiImages.map(m => `${m.id}${m.animated ? ' (animado)' : ''}`).join(', ');
+          resultText += `\n\nOs seguintes emojis não puderam ser usados inline e foram removidos: ${idsList}.`;
+        }
+
+        try { await interaction.followUp({ content: resultText, ephemeral: true }); } catch (e) { console.error('Erro ao responder interação /say após envio:', e); try { await interaction.user.send({ content: resultText }); } catch (ee) { /* ignore */ } }
+      } catch (err) { console.error('Erro em sendFinalAndRespond:', err); try { await interaction.followUp({ content: 'Falha ao enviar a mensagem.', ephemeral: true }); } catch (e) {} }
+    }
     const modal = new ModalBuilder().setCustomId('say_modal').setTitle('Conteúdo (multi-linha)');
     const input = new TextInputBuilder().setCustomId('say_content').setLabel('Mensagem').setStyle(TextInputStyle.Paragraph).setRequired(true).setPlaceholder('Escreva sua mensagem (linhas e mais de uma linha são suportadas)...');
     // If the user provided a content option, attempt to prefill the modal input when supported
@@ -106,8 +167,17 @@ module.exports = {
         // replace each {role} occurrence with corresponding selected role mention
         let idx = 0;
         content = content.replace(/\{role\}/gi, () => { const rid = roleIds[idx++] || ''; return rid ? `<@&${rid}>` : '{role}'; });
-  try { await submitted.followUp({ content: 'Cargos aplicados no texto. Enviando...', ephemeral: true }); } catch (e) { console.error('[say] failed to followUp after role apply', e); }
-  console.log('[say] content after role replacement:', content.slice(0, 300));
+        try { await submitted.followUp({ content: 'Cargos aplicados no texto.', ephemeral: true }); } catch (e) { console.error('[say] failed to followUp after role apply', e); }
+        console.log('[say] content after role replacement:', content.slice(0, 300));
+        // If there are no emoji placeholders, send immediately
+        try {
+          const emojiPlaceholdersAfterRole = (content.match(/\{emoji\}/gi) || []).length;
+          if (emojiPlaceholdersAfterRole === 0) {
+            try { await submitted.followUp({ content: 'Nenhum placeholder {emoji} detectado — enviando agora.', ephemeral: true }); } catch (e) {}
+            await sendFinalAndRespond();
+            return;
+          }
+        } catch (e) { console.error('[say] error checking emoji placeholders after role apply', e); }
       } else {
         await submitted.reply({ content: 'Recebido — enviando...', ephemeral: true });
       }
@@ -211,7 +281,9 @@ module.exports = {
                 await res.reply({ content: 'Emojis aplicados no texto.', ephemeral: true });
                 // mark done
                 chosen.length = emojiPlaceholders; // signal completion
-                break;
+                // Send now after manual emoji paste
+                try { await sendFinalAndRespond(); } catch (e) { console.error('[say] send after manual emoji apply failed', e); }
+                return;
               } catch (err) { console.error('emoji modal error', err); await submitted.followUp({ content: 'Erro ao processar emojis; placeholders removidos.', ephemeral: true }); content = content.replace(/\{emoji\}/gi, ''); aborted = true; break; }
             } else {
               aborted = true; break;
@@ -248,7 +320,9 @@ module.exports = {
                 if (em) return `${em.animated ? '<a:' : '<:'}${em.name}:${em.id}>`;
                 return '';
               });
-              await submitted.followUp({ content: 'Emojis aplicados.', ephemeral: true });
+              // Send immediately after emoji confirmation
+              try { await sendFinalAndRespond(); } catch (e) { console.error('[say] send after emoji confirm failed', e); }
+              return;
             } else { await submitted.followUp({ content: 'Operação cancelada — placeholders {emoji} serão removidos.', ephemeral: true }); content = content.replace(/\{emoji\}/gi, ''); }
           } catch (err) { console.error('emoji selection confirm error', err); await submitted.followUp({ content: 'Erro ao processar confirmação; placeholders removidos.', ephemeral: true }); content = content.replace(/\{emoji\}/gi, ''); }
         }
@@ -338,7 +412,9 @@ module.exports = {
                 if (em) return `${em.animated ? '<a:' : '<:'}${em.name}:${em.id}>`;
                 return '';
               });
-              await submitted.followUp({ content: 'Emojis aplicados.', ephemeral: true });
+              // Send immediately after emoji confirmation
+              try { await sendFinalAndRespond(); } catch (e) { console.error('[say] send after emoji confirm failed', e); }
+              return;
             } else { await submitted.followUp({ content: 'Operação cancelada — placeholders {emoji} serão removidos.', ephemeral: true }); content = content.replace(/\{emoji\}/gi, ''); }
           } catch (err) { console.error('emoji selection confirm error', err); await submitted.followUp({ content: 'Erro ao processar confirmação; placeholders removidos.', ephemeral: true }); content = content.replace(/\{emoji\}/gi, ''); }
         }
