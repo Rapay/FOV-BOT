@@ -306,11 +306,7 @@ module.exports = {
           if (!session.container) return i.reply({ content: 'Crie o container primeiro.', ephemeral: true });
           try {
             console.log(`[message] addbtn pressed for session ${sid} by ${i.user.id}`);
-            if (!i.deferred && !i.replied) await i.deferUpdate();
-          } catch (dErr) {
-            console.error('[message] deferUpdate failed for addbtn', dErr);
-            try { if (!i.replied) await i.reply({ content: 'Abrindo modal...', ephemeral: true }); } catch (rErr) { console.error('[message] reply fallback also failed for addbtn', rErr); }
-          }
+          } catch (e) {}
           // Directly open modal to collect label and URL (no color/style options)
           try {
             const modal = new MB().setCustomId(`modal_btn_url:${sid}`).setTitle('Botão URL');
@@ -320,8 +316,16 @@ module.exports = {
             );
             await i.showModal(modal);
             const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id });
+            const rawLbl = (sub.fields.getTextInputValue('lbl') || '').trim();
+            const lbl = rawLbl.slice(0, 80);
+            const url = (sub.fields.getTextInputValue('url') || '').trim();
+            // basic URL validation
+            if (!/^https?:\/\//i.test(url)) {
+              await sub.reply({ content: 'URL inválida. Deve começar com http:// ou https://', ephemeral: true });
+              return;
+            }
             session.container.buttons = session.container.buttons||[];
-            session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url') });
+            session.container.buttons.push({ type:'url', label: lbl || url, url });
             await sub.reply({ content:'Botão URL adicionado.', ephemeral:true });
             await refresh();
           } catch (err) { console.error('addbtn modal error', err); try { await i.followUp({ content: 'Erro ao adicionar botão.', ephemeral: true }); } catch {} }
@@ -392,7 +396,6 @@ module.exports = {
 
         if (act === 'btn_url') {
           if (!session.container) return i.reply({ content: 'Crie o container primeiro.', ephemeral: true });
-          try { if (!i.deferred && !i.replied) await i.deferUpdate(); } catch {}
           try {
             const modal = new MB().setCustomId(`modal_btn_url:${sid}`).setTitle('Botão URL');
             modal.addComponents(
@@ -401,11 +404,18 @@ module.exports = {
             );
             await i.showModal(modal);
             const sub = await i.awaitModalSubmit({ time:2*60*1000, filter: m => m.user.id===interaction.user.id });
+            const rawLbl = (sub.fields.getTextInputValue('lbl') || '').trim();
+            const lbl = rawLbl.slice(0, 80);
+            const url = (sub.fields.getTextInputValue('url') || '').trim();
+            if (!/^https?:\/\//i.test(url)) {
+              await sub.reply({ content: 'URL inválida. Deve começar com http:// ou https://', ephemeral: true });
+              return;
+            }
             session.container.buttons = session.container.buttons||[];
-            session.container.buttons.push({ type:'url', label: sub.fields.getTextInputValue('lbl'), url: sub.fields.getTextInputValue('url') });
+            session.container.buttons.push({ type:'url', label: lbl || url, url });
             await sub.reply({ content:'Botão URL adicionado.', ephemeral:true });
             await refresh();
-          } catch (err) { console.error('btn_url modal err', err); }
+          } catch (err) { console.error('btn_url modal err', err); try { await i.followUp({ content: 'Erro ao adicionar botão.', ephemeral: true }); } catch {} }
           session.awaitingButtonType = false;
           return;
         }
