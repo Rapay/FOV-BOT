@@ -1,5 +1,6 @@
 {
   "staffRoleId": null,
+  "autoRoleId": null,
   "ticketCategoryId": null,
   "transcriptChannelId": null,
   "faqChannelId": null,
