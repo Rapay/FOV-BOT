@@ -109,6 +109,7 @@ module.exports = {
           if (session.container) {
           const extra = new ARB().addComponents(
             new BB().setCustomId(`uploaddm:${sid}`).setLabel('📤 Upload (DM)').setStyle(BStyle.Primary),
+            new BB().setCustomId(`edit:${sid}`).setLabel('✏️ Editar painel').setStyle(BStyle.Secondary),
             new BB().setCustomId(`addbtn:${sid}`).setLabel('➕ Adicionar Botão').setStyle(BStyle.Secondary),
             new BB().setCustomId(`managebtns:${sid}`).setLabel('🔧 Gerenciar Botões').setStyle(BStyle.Secondary),
             new BB().setCustomId(`done:${sid}`).setLabel('✅ Concluído').setStyle(BStyle.Success)
@@ -142,7 +143,8 @@ module.exports = {
             modal.addComponents(
             new ARB().addComponents(new TIB().setCustomId('t_title').setLabel('Título').setStyle(TIS.Short).setRequired(false)),
             new ARB().addComponents(new TIB().setCustomId('t_desc').setLabel('Descrição').setStyle(TIS.Paragraph).setRequired(false)),
-            new ARB().addComponents(new TIB().setCustomId('t_imgtext').setLabel('Legenda (opcional)').setStyle(TIS.Short).setRequired(false))
+            new ARB().addComponents(new TIB().setCustomId('t_imgtext').setLabel('Legenda (opcional)').setStyle(TIS.Short).setRequired(false)),
+            new ARB().addComponents(new TIB().setCustomId('t_color').setLabel('Cor do embed (hex, ex: #ff0000)').setStyle(TIS.Short).setRequired(false))
           );
           try {
             await i.showModal(modal);
@@ -150,11 +152,59 @@ module.exports = {
             const title = sub.fields.getTextInputValue('t_title') || null;
             const description = sub.fields.getTextInputValue('t_desc') || null;
             const imageText = sub.fields.getTextInputValue('t_imgtext') || null;
-            session.container = { title, description, image: null, imageText, buttons: [] };
+            const colorRaw = (sub.fields.getTextInputValue('t_color') || '').trim() || null;
+            let color = null;
+            if (colorRaw) {
+              color = normalizeHexColor(colorRaw);
+              if (!color) {
+                await sub.reply({ content: 'Código de cor inválido. Use um hex válido como #ff0000 ou ff0000.', ephemeral: true });
+                return;
+              }
+            }
+            session.container = { title, description, image: null, imageText, buttons: [], color };
             let replyMsg = 'Container criado. Você pode enviar imagem via DM (opcional) ou adicionar botões.';
             await sub.reply({ content: replyMsg, ephemeral: true });
             await refresh();
           } catch {}
+          return;
+        }
+
+        if (act === 'edit') {
+          if (!session.container) return i.reply({ content: 'Nenhum container para editar.', ephemeral: true });
+          try {
+            const c = session.container;
+            const modal = new MB().setCustomId(`modal_edit:${sid}`).setTitle('Editar painel');
+            const titleInput = new TIB().setCustomId('t_title').setLabel('Título').setStyle(TIS.Short).setRequired(false);
+            const descInput = new TIB().setCustomId('t_desc').setLabel('Descrição').setStyle(TIS.Paragraph).setRequired(false);
+            const imgTextInput = new TIB().setCustomId('t_imgtext').setLabel('Legenda (opcional)').setStyle(TIS.Short).setRequired(false);
+            const colorInput = new TIB().setCustomId('t_color').setLabel('Cor do embed (hex, ex: #ff0000)').setStyle(TIS.Short).setRequired(false);
+            // Prefill values if present (setValue may be supported by discord.js)
+            try { if (c.title) titleInput.setValue(String(c.title)); } catch (e) {}
+            try { if (c.description) descInput.setValue(String(c.description)); } catch (e) {}
+            try { if (c.imageText) imgTextInput.setValue(String(c.imageText)); } catch (e) {}
+            try { if (c.color) colorInput.setValue(String(c.color)); } catch (e) {}
+            modal.addComponents(new ARB().addComponents(titleInput), new ARB().addComponents(descInput), new ARB().addComponents(imgTextInput), new ARB().addComponents(colorInput));
+            await i.showModal(modal);
+            const sub = await i.awaitModalSubmit({ time: 2*60*1000, filter: m => m.user.id === interaction.user.id });
+            const title = sub.fields.getTextInputValue('t_title') || null;
+            const description = sub.fields.getTextInputValue('t_desc') || null;
+            const imageText = sub.fields.getTextInputValue('t_imgtext') || null;
+            const colorRaw = (sub.fields.getTextInputValue('t_color') || '').trim() || null;
+            let color = null;
+            if (colorRaw) {
+              color = normalizeHexColor(colorRaw);
+              if (!color) {
+                await sub.reply({ content: 'Código de cor inválido. Use um hex válido como #ff0000 ou ff0000.', ephemeral: true });
+                return;
+              }
+            }
+            session.container.title = title;
+            session.container.description = description;
+            session.container.imageText = imageText;
+            session.container.color = color;
+            await sub.reply({ content: 'Painel atualizado.', ephemeral: true });
+            await refresh();
+          } catch (err) { console.error('edit modal error', err); try { await i.followUp({ content: 'Erro ao editar painel.', ephemeral: true }); } catch {} }
           return;
         }
 
