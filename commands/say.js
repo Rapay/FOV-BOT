@@ -180,6 +180,14 @@ module.exports = {
         } catch (e) { console.error('[say] error checking emoji placeholders after role apply', e); }
       } else {
         await submitted.reply({ content: 'Recebido — enviando...', ephemeral: true });
+        // If there are no emoji placeholders, send immediately
+        try {
+          const emojiPlaceholdersNow = (content.match(/\{emoji\}/gi) || []).length;
+          if (emojiPlaceholdersNow === 0) {
+            try { await sendFinalAndRespond(); } catch (e) { console.error('[say] auto-send after modal failed', e); }
+            return;
+          }
+        } catch (e) { console.error('[say] error checking emoji placeholders after simple receipt', e); }
       }
 
       // If user included {emoji} placeholders, offer a select of bot-accessible emojis and a manual paste fallback
