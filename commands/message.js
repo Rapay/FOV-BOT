@@ -131,6 +131,20 @@ module.exports = {
       } catch {}
     };
 
+    // helper to parse a pasted emoji line into a usable object
+    function parseEmojiLine(line) {
+      if (!line) return null;
+      const s = String(line).trim();
+      // custom emoji markup <a:name:id> or <:name:id>
+      const m = s.match(/<(a)?:([A-Za-z0-9_]+):(\d+)>/);
+      if (m) return { id: m[3], name: m[2], animated: !!m[1] };
+      // plain id
+      const idm = s.match(/^(\d{17,20})$/);
+      if (idm) return { id: idm[1], animated: false };
+      // otherwise treat as unicode emoji (take the first emoji/grapheme)
+      return { unicode: s };
+    }
+
     const coll = panel.createMessageComponentCollector({ filter: i => i.user.id === interaction.user.id, time: 10*60*1000 });
     coll.on('collect', async i => {
       try { console.log(`[message] component collected: customId=${i.customId} user=${i.user.id}`); } catch (e) {}
@@ -474,6 +488,166 @@ module.exports = {
           if (!session.container) return i.reply({ content: 'Nenhum container.', ephemeral: true });
           try {
             const c = session.container;
+            // If there are {emoji} placeholders in button labels, prompt the user to paste/select emojis
+            let totalPlaceholders = 0;
+            if (c.buttons && c.buttons.length) {
+              for (const b of c.buttons) {
+                const m = (String(b.label || '').match(/\{emoji\}/gi) || []).length;
+                totalPlaceholders += m;
+              }
+            }
+
+            if (totalPlaceholders > 0) {
+              try {
+                const { StringSelectMenuBuilder, ButtonBuilder } = require('discord.js');
+                // collect emojis from target guild or client cache
+                let allEmojis = [];
+                try {
+                  if (target && target.guild && target.guild.emojis) allEmojis = Array.from(target.guild.emojis.cache.values()).slice(0,25);
+                } catch (e) { allEmojis = []; }
+                if (!allEmojis || allEmojis.length === 0) allEmojis = Array.from(interaction.client.emojis.cache.values()).slice(0,25);
+
+                if (!allEmojis || allEmojis.length === 0) {
+                  // no selectable emojis available: fall back to modal paste for all placeholders
+                  const modal = new MB().setCustomId(`modal_msg_buttons_emoji:${sid}`).setTitle('Forneça os emojis para os botões');
+                  modal.addComponents(new ARB().addComponents(new TIB().setCustomId('emoji_list').setLabel(`Cole ${totalPlaceholders} emoji(s), um por linha (pode ser markup <a:name:id>, apenas id, ou emoji unicode)`).setStyle(TIS.Paragraph).setRequired(true)));
+                  await i.showModal(modal);
+                  const res = await i.awaitModalSubmit({ time: 2*60*1000, filter: m => m.user.id === interaction.user.id });
+                  const lines = (res.fields.getTextInputValue('emoji_list') || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+                  if (!lines || lines.length < totalPlaceholders) {
+                    await res.reply({ content: `Você forneceu menos emojis do que o necessário (${lines.length}/${totalPlaceholders}). Operação cancelada.`, ephemeral: true });
+                    return;
+                  }
+                  let li = 0;
+                  for (const b of c.buttons) {
+                    let label = String(b.label || '');
+                    const count = (label.match(/\{emoji\}/gi) || []).length;
+                    if (count <= 0) continue;
+                    for (let j = 0; j < count; j++) {
+                      const parsed = parseEmojiLine(lines[li++] || '');
+                      if (!parsed) continue;
+                      b.emoji = parsed;
+                      label = label.replace(/\{emoji\}/i, '').trim();
+                    }
+                    b.label = label || null;
+                  }
+                  await res.reply({ content: 'Emojis aplicados aos botões.', ephemeral: true });
+                } else {
+                  const options = allEmojis.map(e => ({ label: e.name || e.id, value: e.id, description: `ID: ${e.id}`, emoji: { id: e.id, name: e.name, animated: e.animated } }));
+                  const select = new StringSelectMenuBuilder().setCustomId(`msg_emoji_select:${sid}`).setPlaceholder('Selecione um emoji (será pedido N vezes)').addOptions(options).setMinValues(1).setMaxValues(1);
+                  const manualBtn = new ButtonBuilder().setCustomId(`msg_fill_emoji:${sid}`).setLabel('Colar IDs/manual').setStyle(BStyle.Secondary);
+                  const progressBtn = new ButtonBuilder().setCustomId(`msg_progress:${sid}`).setLabel(`0/${totalPlaceholders}`).setStyle(BStyle.Secondary).setDisabled(true);
+                  const prompt = await i.reply({ content: `Encontrei ${totalPlaceholders} placeholder(s) {emoji} nos rótulos. Selecione ${totalPlaceholders} emoji(s), um por vez, ou clique em Colar IDs/manual.`, components: [new ARB().addComponents(select), new ARB().addComponents(manualBtn), new ARB().addComponents(progressBtn)], ephemeral: true, fetchReply: true });
+
+                  const chosen = [];
+                  let currentPrompt = prompt;
+                  let aborted = false;
+                  for (let slot = 0; slot < totalPlaceholders; slot++) {
+                    try {
+                      const coll2 = currentPrompt.createMessageComponentCollector({ filter: u => u.user.id === interaction.user.id, max: 1, time: 5*60*1000 });
+                      const sel = await new Promise((resolve) => {
+                        coll2.on('collect', async selI => { resolve(selI); });
+                        coll2.on('end', collected => { if (!collected || collected.size === 0) resolve(null); });
+                      });
+                      if (!sel) { aborted = true; break; }
+                      if (sel.customId && sel.customId.startsWith(`msg_emoji_select:`)) {
+                        try { await sel.deferUpdate(); } catch {}
+                        const id = (sel.values && sel.values[0]) || null;
+                        if (!id) { aborted = true; break; }
+                        chosen.push(id);
+                        try {
+                          const prog = new ButtonBuilder().setCustomId(`msg_progress:${sid}`).setLabel(`${chosen.length}/${totalPlaceholders}`).setStyle(BStyle.Secondary).setDisabled(true);
+                          await sel.editReply({ content: `Selecionado ${chosen.length}/${totalPlaceholders}. Selecione o próximo emoji (ou cancele).`, components: [new ARB().addComponents(select), new ARB().addComponents(manualBtn), new ARB().addComponents(prog)] });
+                          currentPrompt = await interaction.client.channels.fetch(prompt.channelId).then(ch => ch.messages.fetch(sel.message.id)).catch(()=>currentPrompt);
+                        } catch (e) { /* ignore */ }
+                      } else if (sel.customId && sel.customId.startsWith(`msg_fill_emoji:`)) {
+                        try {
+                          await sel.showModal(new ModalBuilder().setCustomId(`modal_msg_emoji_manual:${sid}`).setTitle('Forneça os emojis').addComponents(new ARB().addComponents(new TIB().setCustomId('emoji_list').setLabel('Cole aqui os emojis (um por linha)').setStyle(TIS.Paragraph).setRequired(true).setPlaceholder('<a:seta:851206127471034378>\n851206127471034378'))));
+                          const res = await sel.awaitModalSubmit({ time: 5*60*1000, filter: m => m.user.id === interaction.user.id });
+                          const lines = (res.fields.getTextInputValue('emoji_list') || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+                          const replacements = [];
+                          for (const line of lines.slice(0, totalPlaceholders)) {
+                            const m = line.match(/<(a)?:[A-Za-z0-9_]+:(\d+)>/);
+                            if (m) { replacements.push({ id: m[2], animated: !!m[1] }); continue; }
+                            const idm = line.match(/^(\d+)$/);
+                            if (idm) { replacements.push({ id: idm[1], animated: false }); continue; }
+                            const any = line.match(/(\d{17,20})/);
+                            if (any) { replacements.push({ id: any[1], animated: false }); continue; }
+                            replacements.push({ unicode: line });
+                          }
+                          // apply replacements sequentially to buttons
+                          let ri = 0;
+                          for (const b of c.buttons) {
+                            let label = String(b.label || '');
+                            const count = (label.match(/\{emoji\}/gi) || []).length;
+                            if (count <= 0) continue;
+                            for (let j = 0; j < count; j++) {
+                              const r = replacements[ri++];
+                              if (!r) continue;
+                              if (r.id) {
+                                const em = interaction.client.emojis.cache.get(r.id);
+                                if (em) b.emoji = { id: em.id, name: em.name, animated: em.animated };
+                                else b.emoji = { id: r.id, animated: !!r.animated };
+                              } else if (r.unicode) {
+                                b.emoji = { unicode: r.unicode };
+                              }
+                              label = label.replace(/\{emoji\}/i, '').trim();
+                            }
+                            b.label = label || null;
+                          }
+                          await res.reply({ content: 'Emojis aplicados nos botões (manual).', ephemeral: true });
+                          // break out of iterative flow since manual filled them all
+                          break;
+                        } catch (err) {
+                          console.error('emoji manual fallback error', err);
+                          await i.followUp({ content: 'Falha ao processar emojis manualmente; placeholders removidos.', ephemeral: true }).catch(()=>{});
+                          for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim();
+                          aborted = true; break;
+                        }
+                      } else { aborted = true; break; }
+                    } catch (err) { console.error('emoji selection error', err); await i.followUp({ content: 'Erro ao processar seleção de emojis; placeholders removidos.', ephemeral: true }).catch(()=>{}); for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim(); aborted = true; break; }
+                  }
+
+                  if (aborted || chosen.length === 0) {
+                    await i.followUp({ content: 'Nenhum emoji fornecido — placeholders {emoji} serão removidos.', ephemeral: true }).catch(()=>{});
+                    for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim();
+                  } else if (chosen.length > 0 && chosen.length < totalPlaceholders) {
+                    await i.followUp({ content: 'Seleção incompleta — placeholders {emoji} serão removidos.', ephemeral: true }).catch(()=>{});
+                    for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim();
+                  } else if (chosen.length === totalPlaceholders) {
+                    try {
+                      // confirm before applying
+                      const confirmBtn = new ButtonBuilder().setCustomId(`msg_emoji_confirm:${sid}`).setLabel('Confirmar').setStyle(BStyle.Success);
+                      const cancelBtn = new ButtonBuilder().setCustomId(`msg_emoji_cancel:${sid}`).setLabel('Cancelar').setStyle(BStyle.Danger);
+                      const confirmPrompt = await i.followUp({ content: `Você selecionou ${chosen.length} emoji(s). Confirme para aplicar.`, components: [new ARB().addComponents(confirmBtn, cancelBtn)], ephemeral: true, fetchReply: true });
+                      const confColl = confirmPrompt.createMessageComponentCollector({ filter: u => u.user.id === interaction.user.id, max:1, time: 2*60*1000 });
+                      const conf = await new Promise((resolve) => { confColl.on('collect', async ci => { try { await ci.deferUpdate(); } catch {} resolve(ci); }); confColl.on('end', collected => { if (!collected || collected.size === 0) resolve(null); }); });
+                      if (!conf) { await i.followUp({ content: 'Nenhuma confirmação recebida — placeholders {emoji} serão removidos.', ephemeral: true }).catch(()=>{}); for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim(); }
+                      else if (conf.customId && conf.customId.startsWith(`msg_emoji_confirm:`)) {
+                        // apply chosen sequentially
+                        let ri2 = 0;
+                        for (const b of c.buttons) {
+                          let label = String(b.label || '');
+                          const count = (label.match(/\{emoji\}/gi) || []).length;
+                          if (count <= 0) continue;
+                          for (let j = 0; j < count; j++) {
+                            const id = chosen[ri2++];
+                            if (!id) continue;
+                            const em = interaction.client.emojis.cache.get(id);
+                            if (em) b.emoji = { id: em.id, name: em.name, animated: em.animated };
+                            else b.emoji = { id };
+                            label = label.replace(/\{emoji\}/i, '').trim();
+                          }
+                          b.label = label || null;
+                        }
+                        await i.followUp({ content: 'Emojis aplicados nos botões.', ephemeral: true }).catch(()=>{});
+                      } else { await i.followUp({ content: 'Operação cancelada — placeholders {emoji} serão removidos.', ephemeral: true }).catch(()=>{}); for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim(); }
+                    } catch (err) { console.error('emoji selection confirm error', err); await i.followUp({ content: 'Erro ao processar confirmação; placeholders removidos.', ephemeral: true }).catch(()=>{}); for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim(); }
+                  }
+                }
+              } catch (err) { console.error('preview emoji flow error', err); try { await i.followUp({ content: 'Falha ao processar emojis dos botões; placeholders removidos.', ephemeral: true }); } catch {} for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim(); }
+            }
+
             const e = new EB();
             if (c.title) e.setTitle(c.title);
             if (c.description) e.setDescription(c.description);
@@ -486,7 +660,15 @@ module.exports = {
               c.buttons.slice(0,5).forEach((b,i) => {
                 if (b.type === 'url') {
                   if (b.url) {
-                    const btn = new BB().setLabel(b.label||`btn${i}`).setStyle(BStyle.Link);
+                    const label = b.label || `btn${i}`;
+                    const btn = new BB().setLabel(label).setStyle(BStyle.Link);
+                    // set emoji if provided
+                    if (b.emoji) {
+                      try {
+                        if (b.emoji.id) btn.setEmoji({ id: b.emoji.id, name: b.emoji.name, animated: !!b.emoji.animated });
+                        else if (b.emoji.unicode) btn.setEmoji({ name: b.emoji.unicode });
+                      } catch (ee) { /* ignore */ }
+                    }
                     try { btn.setURL(b.url); } catch {}
                     r.addComponents(btn);
                   } else {
@@ -496,9 +678,16 @@ module.exports = {
                     r.addComponents(btn);
                   }
                 } else {
-                  const btn = new BB().setLabel(b.label||`btn${i}`);
+                  const label = b.label || `btn${i}`;
+                  const btn = new BB().setLabel(label);
                   btn.setStyle(BStyle.Secondary);
                   btn.setCustomId(`btn:${sid}:${i}`);
+                  if (b.emoji) {
+                    try {
+                      if (b.emoji.id) btn.setEmoji({ id: b.emoji.id, name: b.emoji.name, animated: !!b.emoji.animated });
+                      else if (b.emoji.unicode) btn.setEmoji({ name: b.emoji.unicode });
+                    } catch (ee) {}
+                  }
                   r.addComponents(btn);
                 }
               });
@@ -522,6 +711,162 @@ module.exports = {
             if (c.imageText) e.setFooter({ text: c.imageText });
             if (c.color) { try { e.setColor(c.color); } catch {} }
 
+            // If there are {emoji} placeholders in button labels and they haven't been filled, prompt the user
+            let totalPlaceholdersSend = 0;
+            if (c.buttons && c.buttons.length) {
+              for (const b of c.buttons) totalPlaceholdersSend += (String(b.label || '').match(/\{emoji\}/gi) || []).length;
+            }
+            if (totalPlaceholdersSend > 0) {
+              try {
+                const { StringSelectMenuBuilder, ButtonBuilder } = require('discord.js');
+                let allEmojis = [];
+                try { if (ch && ch.guild && ch.guild.emojis) allEmojis = Array.from(ch.guild.emojis.cache.values()).slice(0,25); } catch (e) { allEmojis = []; }
+                if (!allEmojis || allEmojis.length === 0) allEmojis = Array.from(interaction.client.emojis.cache.values()).slice(0,25);
+
+                if (!allEmojis || allEmojis.length === 0) {
+                  const modal = new MB().setCustomId(`modal_msg_buttons_emoji_send:${sid}`).setTitle('Forneça os emojis para os botões');
+                  modal.addComponents(new ARB().addComponents(new TIB().setCustomId('emoji_list').setLabel(`Cole ${totalPlaceholdersSend} emoji(s), um por linha (pode ser markup <a:name:id>, apenas id, ou emoji unicode)`).setStyle(TIS.Paragraph).setRequired(true)));
+                  await i.showModal(modal);
+                  const res = await i.awaitModalSubmit({ time: 2*60*1000, filter: m => m.user.id === interaction.user.id });
+                  const lines = (res.fields.getTextInputValue('emoji_list') || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+                  if (!lines || lines.length < totalPlaceholdersSend) {
+                    await res.reply({ content: `Você forneceu menos emojis do que o necessário (${lines.length}/${totalPlaceholdersSend}). Operação cancelada.`, ephemeral: true });
+                    return;
+                  }
+                  let li2 = 0;
+                  for (const b of c.buttons) {
+                    let label = String(b.label || '');
+                    const count = (label.match(/\{emoji\}/gi) || []).length;
+                    if (count <= 0) continue;
+                    for (let j = 0; j < count; j++) {
+                      const parsed = parseEmojiLine(lines[li2++] || '');
+                      if (!parsed) continue;
+                      b.emoji = parsed;
+                      label = label.replace(/\{emoji\}/i, '').trim();
+                    }
+                    b.label = label || null;
+                  }
+                  await res.reply({ content: 'Emojis aplicados aos botões.', ephemeral: true });
+                } else {
+                  const options = allEmojis.map(e => ({ label: e.name || e.id, value: e.id, description: `ID: ${e.id}`, emoji: { id: e.id, name: e.name, animated: e.animated } }));
+                  const select = new StringSelectMenuBuilder().setCustomId(`msg_emoji_select_send:${sid}`).setPlaceholder('Selecione um emoji (será pedido N vezes)').addOptions(options).setMinValues(1).setMaxValues(1);
+                  const manualBtn = new ButtonBuilder().setCustomId(`msg_fill_emoji_send:${sid}`).setLabel('Colar IDs/manual').setStyle(BStyle.Secondary);
+                  const progressBtn = new ButtonBuilder().setCustomId(`msg_progress_send:${sid}`).setLabel(`0/${totalPlaceholdersSend}`).setStyle(BStyle.Secondary).setDisabled(true);
+                  const prompt = await i.reply({ content: `Encontrei ${totalPlaceholdersSend} placeholder(s) {emoji} nos rótulos. Selecione ${totalPlaceholdersSend} emoji(s), um por vez, ou clique em Colar IDs/manual.`, components: [new ARB().addComponents(select), new ARB().addComponents(manualBtn), new ARB().addComponents(progressBtn)], ephemeral: true, fetchReply: true });
+
+                  const chosen = [];
+                  let currentPrompt = prompt;
+                  let aborted = false;
+                  for (let slot = 0; slot < totalPlaceholdersSend; slot++) {
+                    try {
+                      const coll2 = currentPrompt.createMessageComponentCollector({ filter: u => u.user.id === interaction.user.id, max: 1, time: 5*60*1000 });
+                      const sel = await new Promise((resolve) => {
+                        coll2.on('collect', async selI => { resolve(selI); });
+                        coll2.on('end', collected => { if (!collected || collected.size === 0) resolve(null); });
+                      });
+                      if (!sel) { aborted = true; break; }
+                      if (sel.customId && sel.customId.startsWith(`msg_emoji_select_send:`)) {
+                        try { await sel.deferUpdate(); } catch {}
+                        const id = (sel.values && sel.values[0]) || null;
+                        if (!id) { aborted = true; break; }
+                        chosen.push(id);
+                        try {
+                          const prog = new ButtonBuilder().setCustomId(`msg_progress_send:${sid}`).setLabel(`${chosen.length}/${totalPlaceholdersSend}`).setStyle(BStyle.Secondary).setDisabled(true);
+                          await sel.editReply({ content: `Selecionado ${chosen.length}/${totalPlaceholdersSend}. Selecione o próximo emoji (ou cancele).`, components: [new ARB().addComponents(select), new ARB().addComponents(manualBtn), new ARB().addComponents(prog)] });
+                          currentPrompt = await interaction.client.channels.fetch(prompt.channelId).then(ch => ch.messages.fetch(sel.message.id)).catch(()=>currentPrompt);
+                        } catch (e) { /* ignore */ }
+                      } else if (sel.customId && sel.customId.startsWith(`msg_fill_emoji_send:`)) {
+                        try {
+                          await sel.showModal(new ModalBuilder().setCustomId(`modal_msg_emoji_manual_send:${sid}`).setTitle('Forneça os emojis').addComponents(new ARB().addComponents(new TIB().setCustomId('emoji_list').setLabel('Cole aqui os emojis (um por linha)').setStyle(TIS.Paragraph).setRequired(true).setPlaceholder('<a:seta:851206127471034378>\n851206127471034378'))));
+                          const res = await sel.awaitModalSubmit({ time: 5*60*1000, filter: m => m.user.id === interaction.user.id });
+                          const lines = (res.fields.getTextInputValue('emoji_list') || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+                          const replacements = [];
+                          for (const line of lines.slice(0, totalPlaceholdersSend)) {
+                            const m = line.match(/<(a)?:[A-Za-z0-9_]+:(\d+)>/);
+                            if (m) { replacements.push({ id: m[2], animated: !!m[1] }); continue; }
+                            const idm = line.match(/^(\d+)$/);
+                            if (idm) { replacements.push({ id: idm[1], animated: false }); continue; }
+                            const any = line.match(/(\d{17,20})/);
+                            if (any) { replacements.push({ id: any[1], animated: false }); continue; }
+                            replacements.push({ unicode: line });
+                          }
+                          // apply replacements sequentially to buttons
+                          let ri = 0;
+                          for (const b of c.buttons) {
+                            let label = String(b.label || '');
+                            const count = (label.match(/\{emoji\}/gi) || []).length;
+                            if (count <= 0) continue;
+                            for (let j = 0; j < count; j++) {
+                              const r = replacements[ri++];
+                              if (!r) continue;
+                              if (r.id) {
+                                const em = interaction.client.emojis.cache.get(r.id);
+                                if (em) b.emoji = { id: em.id, name: em.name, animated: em.animated };
+                                else b.emoji = { id: r.id, animated: !!r.animated };
+                              } else if (r.unicode) {
+                                b.emoji = { unicode: r.unicode };
+                              }
+                              label = label.replace(/\{emoji\}/i, '').trim();
+                            }
+                            b.label = label || null;
+                          }
+                          await res.reply({ content: 'Emojis aplicados nos botões (manual).', ephemeral: true });
+                          // break out of iterative flow since manual filled them all
+                          break;
+                        } catch (err) {
+                          console.error('emoji manual fallback error', err);
+                          await i.followUp({ content: 'Falha ao processar emojis manualmente; placeholders removidos.', ephemeral: true }).catch(()=>{});
+                          for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim();
+                          aborted = true; break;
+                        }
+                      } else { aborted = true; break; }
+                    } catch (err) { console.error('emoji selection error', err); await i.followUp({ content: 'Erro ao processar seleção de emojis; placeholders removidos.', ephemeral: true }).catch(()=>{}); for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim(); aborted = true; break; }
+                  }
+
+                  if (aborted || chosen.length === 0) {
+                    await i.followUp({ content: 'Nenhum emoji fornecido — placeholders {emoji} serão removidos.', ephemeral: true }).catch(()=>{});
+                    for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim();
+                  } else if (chosen.length > 0 && chosen.length < totalPlaceholdersSend) {
+                    await i.followUp({ content: 'Seleção incompleta — placeholders {emoji} serão removidos.', ephemeral: true }).catch(()=>{});
+                    for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim();
+                  } else if (chosen.length === totalPlaceholdersSend) {
+                    try {
+                      // confirm before applying
+                      const confirmBtn = new ButtonBuilder().setCustomId(`msg_emoji_confirm_send:${sid}`).setLabel('Confirmar').setStyle(BStyle.Success);
+                      const cancelBtn = new ButtonBuilder().setCustomId(`msg_emoji_cancel_send:${sid}`).setLabel('Cancelar').setStyle(BStyle.Danger);
+                      const confirmPrompt = await i.followUp({ content: `Você selecionou ${chosen.length} emoji(s). Confirme para aplicar.`, components: [new ARB().addComponents(confirmBtn, cancelBtn)], ephemeral: true, fetchReply: true });
+                      const confColl = confirmPrompt.createMessageComponentCollector({ filter: u => u.user.id === interaction.user.id, max:1, time: 2*60*1000 });
+                      const conf = await new Promise((resolve) => { confColl.on('collect', async ci => { try { await ci.deferUpdate(); } catch {} resolve(ci); }); confColl.on('end', collected => { if (!collected || collected.size === 0) resolve(null); }); });
+                      if (!conf) { await i.followUp({ content: 'Nenhuma confirmação recebida — placeholders {emoji} serão removidos.', ephemeral: true }).catch(()=>{}); for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim(); }
+                      else if (conf.customId && conf.customId.startsWith(`msg_emoji_confirm_send:`)) {
+                        // apply chosen sequentially
+                        let ri2 = 0;
+                        for (const b of c.buttons) {
+                          let label = String(b.label || '');
+                          const count = (label.match(/\{emoji\}/gi) || []).length;
+                          if (count <= 0) continue;
+                          for (let j = 0; j < count; j++) {
+                            const id = chosen[ri2++];
+                            if (!id) continue;
+                            const em = interaction.client.emojis.cache.get(id);
+                            if (em) b.emoji = { id: em.id, name: em.name, animated: em.animated };
+                            else b.emoji = { id };
+                            label = label.replace(/\{emoji\}/i, '').trim();
+                          }
+                          b.label = label || null;
+                        }
+                        await i.followUp({ content: 'Emojis aplicados nos botões.', ephemeral: true }).catch(()=>{});
+                      } else { await i.followUp({ content: 'Operação cancelada — placeholders {emoji} serão removidos.', ephemeral: true }).catch(()=>{}); for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim(); }
+                    } catch (err) { console.error('emoji selection confirm error', err); await i.followUp({ content: 'Erro ao processar confirmação; placeholders removidos.', ephemeral: true }).catch(()=>{}); for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim(); }
+                  }
+                }
+              } catch (err) {
+                console.error('send emoji flow error', err);
+                try { await i.followUp({ content: 'Falha ao processar emojis dos botões; placeholders removidos.', ephemeral: true }); } catch {}
+                for (const b of c.buttons || []) b.label = String(b.label || '').replace(/\{emoji\}/gi, '').trim();
+              }
+            }
+
             // Build components: for webhook buttons we use a temporary customId and will rewrite after sending
             const comps = [];
             if (c.buttons && c.buttons.length) {
@@ -530,6 +875,10 @@ module.exports = {
                 if (b.type === 'url') {
                   if (b.url) {
                     const btn = new BB().setLabel(b.label||`btn${i}`).setStyle(BStyle.Link);
+                    // set emoji if present
+                    if (b.emoji) {
+                      try { if (b.emoji.id) btn.setEmoji({ id: b.emoji.id, name: b.emoji.name, animated: !!b.emoji.animated }); else if (b.emoji.unicode) btn.setEmoji({ name: b.emoji.unicode }); } catch (ee) {}
+                    }
                     try { btn.setURL(b.url); } catch {}
                     r.addComponents(btn);
                   } else {
@@ -542,6 +891,9 @@ module.exports = {
                   const btn = new BB().setLabel(b.label||`btn${i}`);
                   btn.setStyle(BStyle.Secondary);
                   btn.setCustomId(`btn:${sid}:${i}`);
+                  if (b.emoji) {
+                    try { if (b.emoji.id) btn.setEmoji({ id: b.emoji.id, name: b.emoji.name, animated: !!b.emoji.animated }); else if (b.emoji.unicode) btn.setEmoji({ name: b.emoji.unicode }); } catch (ee) {}
+                  }
                   r.addComponents(btn);
                 }
               });
